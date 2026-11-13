@@ -584,8 +584,13 @@ impl<W: LayoutElement> Workspace<W> {
         self.floating.set_canvas_transform(transform);
 
         let frame_zoom = if self.is_canvas() { transform.zoom } else { 1. };
-        if !self.canvas.view.is_zoom_animating() && frame_zoom != self.canvas.frame_zoom {
-            self.canvas.frame_zoom = frame_zoom;
+        let zoom_settled = !self.canvas.view.is_zoom_animating();
+        // rice: tiles get their canvas options (decorations) as soon as the mode changes.
+        let mode_changed = self.floating.options().canvas_tile_zoom.is_some() != self.is_canvas();
+        if (zoom_settled && frame_zoom != self.canvas.frame_zoom) || mode_changed {
+            if zoom_settled {
+                self.canvas.frame_zoom = frame_zoom;
+            }
             let options = self.floating_options(&self.options);
             self.floating.update_config(
                 self.view_size,
@@ -600,21 +605,21 @@ impl<W: LayoutElement> Workspace<W> {
     /// so that they stay at least one physical pixel wide at the settled zoom.
     pub(super) fn floating_options(&self, options: &Rc<Options>) -> Rc<Options> {
         let zoom = self.canvas.frame_zoom;
-        if !self.is_canvas() || zoom >= 1. {
-            return options.clone();
-        }
-
-        let scale = self.scale.fractional_scale();
-        let layout = &options.layout;
-        let border = compensated_frame_width(layout.border.width, zoom, scale);
-        let focus_ring = compensated_frame_width(layout.focus_ring.width, zoom, scale);
-        if border == layout.border.width && focus_ring == layout.focus_ring.width {
+        if !self.is_canvas() {
             return options.clone();
         }
 
         let mut adjusted = Options::clone(options);
-        adjusted.layout.border.width = border;
-        adjusted.layout.focus_ring.width = focus_ring;
+        // rice: canvas tiles know the settled zoom (focus style, crisp title text).
+        adjusted.canvas_tile_zoom = Some(zoom);
+        if zoom < 1. {
+            let scale = self.scale.fractional_scale();
+            let layout = &options.layout;
+            adjusted.layout.border.width =
+                compensated_frame_width(layout.border.width, zoom, scale);
+            adjusted.layout.focus_ring.width =
+                compensated_frame_width(layout.focus_ring.width, zoom, scale);
+        }
         Rc::new(adjusted)
     }
 

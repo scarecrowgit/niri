@@ -1322,15 +1322,17 @@ impl<W: LayoutElement> FloatingSpace<W> {
         rules: &ResolvedWindowRules,
     ) -> Size<i32, Logical> {
         let border = self.options.layout.border.merged_with(&rules.border);
+        // rice: tile heights include the title strip.
+        let title_bar = super::title_bar::title_bar_height_for(&self.options, rules);
 
-        let resolve = |size: Option<PresetSize>, working_area_size: f64| {
+        let resolve = |size: Option<PresetSize>, working_area_size: f64, extra: f64| {
             if let Some(size) = size {
                 let size = match resolve_preset_size(size, working_area_size) {
                     ResolvedSize::Tile(mut size) => {
                         if !border.off {
                             size -= border.width * 2.;
                         }
-                        size
+                        size - extra
                     }
                     ResolvedSize::Window(size) => size,
                 };
@@ -1341,8 +1343,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         };
 
-        let width = resolve(width, self.working_area.size.w);
-        let height = resolve(height, self.working_area.size.h);
+        let width = resolve(width, self.working_area.size.w, 0.);
+        let height = resolve(height, self.working_area.size.h, title_bar);
 
         Size::from((width, height))
     }
@@ -1399,7 +1401,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         &self.clock
     }
 
-    #[cfg(test)]
+    // rice: also used by canvas mode outside of tests.
     pub fn options(&self) -> &Rc<Options> {
         &self.options
     }

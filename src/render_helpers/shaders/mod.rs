@@ -21,6 +21,8 @@ pub struct Shaders {
     pub custom_resize: RefCell<Option<ShaderProgram>>,
     pub custom_close: RefCell<Option<ShaderProgram>>,
     pub custom_open: RefCell<Option<ShaderProgram>>,
+    /// rice: canvas plane grid and region outlines.
+    pub canvas_grid: Option<ShaderProgram>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +32,7 @@ pub enum ProgramType {
     Resize,
     Close,
     Open,
+    CanvasGrid, // rice
 }
 
 impl Shaders {
@@ -142,6 +145,28 @@ impl Shaders {
             })
             .ok();
 
+        // rice: canvas plane grid and region outlines.
+        let canvas_grid = ShaderProgram::compile(
+            renderer,
+            include_str!("canvas_grid.frag"),
+            &[
+                UniformName::new("mode", UniformType::_1f),
+                UniformName::new("elem_size", UniformType::_2f),
+                UniformName::new("grid_offset", UniformType::_2f),
+                UniformName::new("spacing", UniformType::_1f),
+                UniformName::new("line_width", UniformType::_1f),
+                UniformName::new("min_width", UniformType::_1f),
+                UniformName::new("dash", UniformType::_2f),
+                UniformName::new("color", UniformType::_4f),
+                UniformName::new("bg_color", UniformType::_4f),
+            ],
+            &[],
+        )
+        .map_err(|err| {
+            warn!("error compiling canvas grid shader: {err:?}");
+        })
+        .ok();
+
         let blur = BlurProgram::compile(renderer)
             .map_err(|err| {
                 warn!("error compiling blur shaders: {err:?}");
@@ -159,6 +184,7 @@ impl Shaders {
             custom_resize: RefCell::new(None),
             custom_close: RefCell::new(None),
             custom_open: RefCell::new(None),
+            canvas_grid,
         }
     }
 
@@ -207,6 +233,7 @@ impl Shaders {
                 .or_else(|| self.resize.clone()),
             ProgramType::Close => self.custom_close.borrow().clone(),
             ProgramType::Open => self.custom_open.borrow().clone(),
+            ProgramType::CanvasGrid => self.canvas_grid.clone(), // rice
         }
     }
 }

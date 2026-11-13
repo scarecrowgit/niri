@@ -14,6 +14,7 @@ use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
+use super::title_bar::title_bar_height_for; // rice
 use super::workspace::{InteractiveResize, ResolvedSize};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
@@ -553,10 +554,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             0
         };
 
+        // rice: tile heights include the title strip.
+        let title_bar = title_bar_height_for(&self.options, rules);
+
         let mut full_height = self.working_area.size.h - self.options.layout.gaps * 2.;
         if !border.off {
             full_height -= border.width * 2.;
         }
+        full_height -= title_bar; // rice
 
         let height = if let Some(height) = height {
             let height = match resolve_preset_size(height, &self.options, working_size.h, extra.h) {
@@ -564,7 +569,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     if !border.off {
                         size -= border.width * 2.;
                     }
-                    size
+                    size - title_bar // rice
                 }
                 ResolvedSize::Window(size) => size,
             };
@@ -4139,6 +4144,16 @@ impl<W: LayoutElement> Column<W> {
         }
 
         if self.options.layout.tab_indicator != options.layout.tab_indicator {
+            update_sizes = true;
+        }
+
+        // rice: the title strip is part of the tile height.
+        if self
+            .options
+            .layout
+            .title_bar
+            .geometry_differs(&options.layout.title_bar)
+        {
             update_sizes = true;
         }
 

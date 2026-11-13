@@ -135,6 +135,9 @@ pub struct Mapped {
     /// Used for double-resize-click tracking.
     last_interactive_resize_start: Cell<Option<(Duration, ResizeEdge)>>,
 
+    /// rice: time of the last press on the compositor-drawn title bar, for double clicks.
+    last_title_bar_click: Cell<Option<Duration>>,
+
     /// Whether this window is in windowed (fake) fullscreen.
     ///
     /// In this mode, the underlying window is told that it's fullscreen, while keeping it as
@@ -305,6 +308,7 @@ impl Mapped {
             pending_transactions: Vec::new(),
             interactive_resize: None,
             last_interactive_resize_start: Cell::new(None),
+            last_title_bar_click: Cell::new(None),
             is_windowed_fullscreen: false,
             is_pending_windowed_fullscreen: false,
             uncommitted_windowed_fullscreen: Vec::new(),
@@ -497,6 +501,11 @@ impl Mapped {
 
     pub fn last_interactive_resize_start(&self) -> &Cell<Option<(Duration, ResizeEdge)>> {
         &self.last_interactive_resize_start
+    }
+
+    // rice
+    pub fn last_title_bar_click(&self) -> &Cell<Option<Duration>> {
+        &self.last_title_bar_click
     }
 
     pub fn render_for_screen_cast<R: NiriRenderer>(
@@ -1394,6 +1403,13 @@ impl LayoutElement for Mapped {
 
     fn interactive_resize_data(&self) -> Option<InteractiveResizeData> {
         Some(self.interactive_resize.as_ref()?.data())
+    }
+
+    // rice: text of the compositor-drawn title bar.
+    fn title_bar_text(&self) -> (Option<String>, Option<String>) {
+        with_toplevel_role(self.toplevel(), |role| {
+            (role.title.clone(), role.app_id.clone())
+        })
     }
 
     fn on_commit(&mut self, commit_serial: Serial) {

@@ -1102,6 +1102,36 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    // rice: named regions on the canvas plane of the focused workspace.
+    /// Add a named region (dashed rectangle with a label) to the canvas plane of the focused
+    /// workspace, or replace the region with this name.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Add a named region to the focused canvas")
+    )]
+    CanvasAddRegion {
+        /// Name of the region, shown as its label.
+        name: String,
+        /// Plane X coordinate of the top-left corner in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        x: f64,
+        /// Plane Y coordinate of the top-left corner in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        y: f64,
+        /// Width in logical pixels.
+        w: f64,
+        /// Height in logical pixels.
+        h: f64,
+    },
+    /// Remove a named region from the canvas plane of the focused workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Remove a named region from the focused canvas")
+    )]
+    CanvasRemoveRegion {
+        /// Name of the region.
+        name: String,
+    },
 }
 
 /// Change in window or column size.

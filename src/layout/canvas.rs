@@ -402,6 +402,8 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) frame_zoom: f64,
     /// Plane position of the last window placed by the new-window cascade.
     pub(super) cascade: Option<Point<f64, Logical>>,
+    /// rice: plane grid and named regions (runtime regions and render state).
+    pub(super) decor: super::canvas_grid::CanvasDecorations,
 }
 
 impl<Id> Default for WorkspaceCanvas<Id> {
@@ -413,6 +415,7 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             memory: None,
             frame_zoom: 1.,
             cascade: None,
+            decor: Default::default(), // rice
         }
     }
 }

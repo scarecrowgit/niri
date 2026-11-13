@@ -53,6 +53,8 @@ pub struct Canvas {
     pub zoom_steps: Vec<f64>,
     /// Pan distance of one pan action, in logical view pixels (divided by zoom on the plane).
     pub pan_step: f64,
+    /// rice: plane grid and named regions, see `crate::decorations`.
+    pub decor: crate::decorations::CanvasDecor,
 }
 
 impl Default for Canvas {
@@ -61,6 +63,7 @@ impl Default for Canvas {
             default_zoom: 0.62,
             zoom_steps: vec![0.4, 0.5, 0.62, 0.75, 0.9, 1.0],
             pan_step: 120.,
+            decor: Default::default(), // rice
         }
     }
 }
@@ -116,6 +119,9 @@ pub struct CanvasPart {
     pub zoom_steps: Option<Vec<FloatOrInt<0, 4>>>,
     #[knuffel(child, unwrap(argument))]
     pub pan_step: Option<FloatOrInt<1, 65535>>,
+    /// rice: plane grid and named regions, see `crate::decorations`.
+    #[knuffel(flatten(child))]
+    pub decor: crate::decorations::CanvasDecorPart,
 }
 
 impl MergeWith<CanvasPart> for Canvas {
@@ -129,6 +135,7 @@ impl MergeWith<CanvasPart> for Canvas {
         if let Some(x) = part.pan_step {
             self.pan_step = x.0;
         }
+        self.decor.merge_with(&part.decor); // rice
         self.normalize();
     }
 }
@@ -236,6 +243,7 @@ mod tests {
                 // Sorted and deduplicated.
                 zoom_steps: vec![0.25, 0.5, 1.0],
                 pan_step: 200.,
+                ..Default::default() // rice
             }
         );
     }
@@ -274,6 +282,7 @@ mod tests {
                 default_zoom: 0.75,
                 zoom_steps: Canvas::default().zoom_steps,
                 pan_step: 300.,
+                ..Default::default() // rice
             }
         );
 

@@ -77,6 +77,7 @@ use crate::window::ResolvedWindowRules;
 
 // rice: infinite canvas workspace mode.
 pub mod canvas;
+pub mod canvas_grid; // rice
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
@@ -87,6 +88,7 @@ pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
 pub mod tile;
+pub mod title_bar; // rice
 pub mod workspace;
 
 #[cfg(test)]
@@ -339,6 +341,11 @@ pub trait LayoutElement {
     fn interactive_resize_data(&self) -> Option<InteractiveResizeData>;
 
     fn on_commit(&mut self, serial: Serial);
+
+    /// rice: title and subtitle (app id) shown in the compositor-drawn title bar.
+    fn title_bar_text(&self) -> (Option<String>, Option<String>) {
+        (None, None)
+    }
 }
 
 #[derive(Debug)]
@@ -406,6 +413,8 @@ pub struct Options {
     pub disable_resize_throttling: bool,
     pub disable_transactions: bool,
     pub deactivate_unfocused_windows: bool,
+    /// rice: settled canvas zoom, set only in the options of tiles on a canvas plane.
+    pub canvas_tile_zoom: Option<f64>,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -549,6 +558,9 @@ pub enum HitType {
         /// Whether the hit was on the tab indicator.
         is_tab_indicator: bool,
     },
+    /// rice: the hit is on the compositor-drawn title bar of a window: pressing activates the
+    /// window, dragging moves it.
+    TitleBar,
 }
 
 #[derive(Debug)]
@@ -639,6 +651,7 @@ impl HitType {
         match &mut self {
             HitType::Input { win_pos } => *win_pos += offset,
             HitType::Activate { .. } => (),
+            HitType::TitleBar => (), // rice
         }
         self
     }
@@ -659,6 +672,7 @@ impl HitType {
                 is_tab_indicator: false,
             },
             HitType::Activate { .. } => self,
+            HitType::TitleBar => self, // rice: title bars stay draggable through any zoom.
         }
     }
 }
@@ -674,6 +688,7 @@ impl Options {
             disable_resize_throttling: config.debug.disable_resize_throttling,
             disable_transactions: config.debug.disable_transactions,
             deactivate_unfocused_windows: config.debug.deactivate_unfocused_windows,
+            canvas_tile_zoom: None, // rice
         }
     }
 

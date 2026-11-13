@@ -307,6 +307,195 @@ private D-Bus session, and the built `niri -c test.kdl` started inside it with
 - Mod+drag pan grab and Mod+wheel zoom-at-cursor (anchor = pointer).
 - IPC events and requests listed above.
 - Hidden workspace for a scratchpad.
-- Plane grid / dot background under canvas workspaces.
-- Named regions on the plane (bookmarked offsets/zooms).
-- Title strips / decorations for canvas windows.
+- ~~Plane grid / dot background, named regions, title strips~~: done, see "Decorations" below.
+
+## Decorations: title strips, focus ring gap, canvas grid and regions
+
+Compositor-drawn window chrome and canvas plane decorations for the rice desktop design
+(`docs/design/pages/desk-05-*`, `sys-04-*`). Everything is **off by default**: without the
+options below, tiles, focus rings and canvas workspaces render exactly like before (no strip,
+gap 0, no grid, no regions, no extra render elements on strip workspaces).
+
+### Config reference
+
+```kdl
+layout {
+    // Title strip above every window. Off unless this block is present (`off` inside turns it
+    // off again, e.g. in a per-output or per-workspace layout override).
+    title-bar {
+        height 28                 // logical px, includes the bottom line
+        font "JetBrains Mono 11"  // Pango font description; the size is in logical px
+        padding 12                // left/right padding, also the title/subtitle gap
+        background-color "#1B1B19"
+        text-color "#DAD7CF"      // window title, left, ellipsized
+        muted-color "#96938B"     // subtitle (app id), right, at most half the width
+        line-color "#2A2A27"      // bottom line
+        line-width 1              // 0 hides the line
+    }
+
+    focus-ring {
+        gap 4                     // space between the window and the ring (default 0)
+        // How focus is shown on canvas workspaces:
+        //   "ring"   (default) same ring as on strip workspaces,
+        //   "border" no ring; the window border takes the ring's active colour/gradient,
+        //   "off"    no ring.
+        canvas-style "border"
+    }
+
+    canvas {
+        grid "lines"              // "lines", "dots" or "off" (default)
+        grid-spacing 80           // plane px between lines / dots
+        grid-color "#161615"
+        grid-line-width 1         // line width, or dot diameter for "dots" (min 2 physical px)
+        background-color "#111110" // plane fill under the grid (opaque: hides the backdrop)
+        region-color "#2A2A27"    // dashed region outlines
+        region-label-color "#96938B"
+        region-font "JetBrains Mono 16" // caps label, size in plane px
+        region "dots" x=740 y=320 w=1740 h=1210 // plane coordinates
+    }
+}
+
+window-rule {
+    match app-id="firefox"
+    title-bar false               // apps that draw their own header; `true` forces a strip
+}
+```
+
+`title-bar`, `focus-ring` and `canvas` are layout options: they merge per output and per named
+workspace (`workspace "dots" { layout { canvas { region ... } } }`). Regions of a more specific
+section replace the less specific ones; a later `region` with the same name replaces an earlier
+one. `gap` and `canvas-style` are also accepted in window-rule `focus-ring {}` blocks.
+
+Actions (`niri msg action …`, binds), acting on the focused workspace; appended at the end of
+both `Action` enums:
+
+| Bind action | IPC action | Notes |
+| --- | --- | --- |
+| `canvas-add-region "name" X Y W H` | `CanvasAddRegion { name, x, y, w, h }` | adds, or replaces by name (config regions too) |
+| `canvas-remove-region "name"` | `CanvasRemoveRegion { name }` | also hides a config region until the next restart |
+
+Regions are not exposed in IPC state yet (follow-up for the IPC work:
+`Workspace::canvas_regions()` returns the effective list).
+
+### Recommended config (Ash), both modes
+
+The design wants a 1 px line-coloured frame on every window, a 1 px accent ring 4 px outside
+the focused window in strip mode, and the window's own frame turning accent on canvases:
+
+```kdl
+layout {
+    gaps 12
+    background-color "#111110"
+    shadow { off; }
+    border {
+        width 1
+        active-color "#2A2A27"
+        inactive-color "#2A2A27"
+    }
+    focus-ring {
+        width 1
+        gap 4
+        active-color "#E0A458"
+        inactive-color "#2A2A27"
+        canvas-style "border"
+    }
+    title-bar {
+        height 28
+        font "JetBrains Mono 11"
+        padding 12
+        background-color "#1B1B19"
+        text-color "#DAD7CF"
+        muted-color "#96938B"
+        line-color "#2A2A27"
+    }
+    canvas {
+        grid "lines"            // dot themes: grid "dots"; grid-spacing 40; grid-color <line>; grid-line-width 2
+        grid-spacing 80
+        grid-color "#161615"
+        grid-line-width 1
+        background-color "#111110"
+        region-color "#2A2A27"
+        region-label-color "#96938B"
+        region-font "JetBrains Mono 16"
+    }
+}
+```
+
+A canvas-only setup without `canvas-style` works too: `border { width 1; active-color
+"#E0A458"; inactive-color "#2A2A27"; }` with `focus-ring { off; }` gives the "own border turns
+accent" look everywhere. Theme switching: put the block above in an included KDL file that
+the shell rewrites; niri reloads it and every colour (strip, text, ring, border, grid,
+regions) updates live (text textures are keyed by their colours and re-rendered).
+
+### Behaviour
+
+- **Geometry**: tile = border + strip + window + border (vertically). Every tile ↔ window
+  conversion accounts for the strip: `tile_size`, `tile_expected_or_current_size`,
+  `window_loc`, `request_tile_size`, `tile/window_height_for_*`, min/max size, the resize
+  animation start size, and new-window sizes in the scrolling and floating spaces. Fullscreen
+  and maximized-to-edges tiles have no strip (it shrinks away with the expand animation);
+  `maximize-column` keeps it. Floating and canvas windows have it; in tabbed columns every
+  tile has its strip and only the visible tile is drawn. Heights are rounded to physical
+  pixels (`28 * 1.5 = 42`, `27 * 1.5 = 40.5 → 41` physical px).
+- **Rendering**: background (rounded with the window's top radius via the border shader when
+  the window has one; the window content then gets square top corners), the bottom line, and
+  one text texture per (title, subtitle, width, scale, font, colours), re-rendered only when
+  one of those changes (title changes queue a redraw). On a canvas the text is rasterized at
+  output scale × the settled zoom, so it is crisp once the zoom settles (scaled during the
+  zoom animation). Blocked-out windows hide the text in screencasts. Open/close/resize/alpha
+  animations and output screenshots include the strip; window-only screenshots/casts don't
+  (like borders).
+- **Input**: the strip is part of the tile for hit-testing (`HitType::TitleBar`, kept through
+  canvas zoom and the overview downgrade). Left press activates and starts a move grab
+  (dragging moves the window like Mod+drag; a click without drag just activates); a double
+  click toggles `maximize-column` in strip mode, and on a canvas zooms to 100% centred on the
+  window, or fits all windows when already at 100%. Other buttons do nothing. Mod+RMB resize
+  edges are computed on the whole tile as before.
+- **Focus ring gap**: the ring is drawn around the tile grown by `gap` on every side, always as
+  a border (never as a background fill, which would paint the gap), with concentric corners
+  (outer radius = window radius + gap + width; square windows get `gap + width`). Gap is
+  rounded to physical pixels; under canvas zoom it scales with the tile.
+- **Canvas grid**: one shader element (`canvas_grid.frag`) covering the workspace view under
+  all windows, computed from the current canvas transform: pixel-snapped lines at least one
+  physical pixel wide, or anti-aliased dots (min 2 physical px), fading out when the spacing
+  drops below ~12 physical px (gone at 4). With `background-color` it is opaque. Its uniforms
+  only change when the view pans or zooms, so a static canvas causes no grid damage.
+- **Regions**: four dashed edge elements (same shader) plus a caps label (`+0.08em` letter
+  spacing) 14/8 plane px inside the top-left corner, all scaled with the plane; culled when
+  off screen.
+
+### Files
+
+| File | Change |
+| --- | --- |
+| `niri-config/src/decorations.rs` (new) | `TitleBar(Part)`, `FocusRingCanvasStyle`, `CanvasGrid`, `CanvasDecor(Part)`, `CanvasRegion`, region node parsing (`DecodePartial`), parse tests |
+| `niri-config/src/appearance.rs` | `FocusRing.gap/canvas_style`, `BorderRule.gap/canvas_style`, merging keeps them |
+| `niri-config/src/{layout,window_rule,lib}.rs` | `layout.title_bar`, window rule `title-bar`, module + re-exports, parse snapshot |
+| `niri-config/src/canvas.rs` (input agent's) | one flattened `decor` field in `CanvasPart`/`Canvas` + merge + 2 test literals |
+| `niri-config/src/binds.rs` (input agent's), `niri-ipc/src/lib.rs` (IPC agent's) | `CanvasAddRegion`, `CanvasRemoveRegion` appended + conversion |
+| `src/layout/title_bar.rs` (new) | strip state, render elements, text texture cache, `title_bar_height_for` |
+| `src/layout/canvas_grid.rs` (new) | grid/edge shader element, `CanvasDecorations`, labels, `Layout::canvas_add/remove_region` |
+| `src/layout/workspace/canvas_decor.rs` (new) | `Workspace` hooks: update/render decorations, region API |
+| `src/render_helpers/shaders/canvas_grid.frag` (new), `shaders/mod.rs` | shader + `ProgramType::CanvasGrid` |
+| `src/layout/tile.rs` | strip geometry, rendering, hit-testing, canvas focus style, ring gap rounding |
+| `src/layout/focus_ring.rs` | gap |
+| `src/layout/{scrolling,floating}.rs` | new-window heights minus the strip; column resizes on strip changes; `FloatingSpace::options()` no longer test-only |
+| `src/layout/workspace.rs`, `workspace/canvas_ext.rs`, `canvas.rs` | `mod canvas_decor`, render element variant, update/render/shader hooks; canvas tiles get `Options::canvas_tile_zoom`; `WorkspaceCanvas.decor` |
+| `src/layout/mod.rs` (input agent's) | `mod title_bar/canvas_grid`, `LayoutElement::title_bar_text()` (default `None`), `HitType::TitleBar`, `Options::canvas_tile_zoom` |
+| `src/input/title_bar_click.rs`, `src/input/decor_actions.rs` (new), `src/input/mod.rs` | title bar press/drag/double click, region actions |
+| `src/window/{mapped,mod}.rs`, `src/handlers/xdg_shell.rs`, `src/layout/insert_hint_element.rs` | title text, rule, double-click time, redraw on title change, literal fix |
+| `src/layout/tests/decorations.rs` (new), `src/layout/tests.rs` | geometry/hit/canvas/region tests; title bar, ring gap and canvas style in the randomized configs |
+
+### Limitations
+
+- Pointer interaction with the strip (drag, double click) is implemented but was not
+  exercised in the nested session (it has no input devices); it is covered only by the
+  hit-test unit tests.
+- The tab indicator of a tabbed column sits inside the focus ring gap.
+- During a fullscreen/maximize animation the strip fades out at full height above the window
+  instead of shrinking.
+- Strip text is not re-rasterized for the overview zoom (scaled texture).
+- `canvas-remove-region` of a config region lasts until niri restarts; regions are not in IPC
+  state yet; region labels are not hit-testable.
+- New-window size presets subtract the unrounded strip height (like niri does for borders),
+  so at fractional scales a preset can be off by under one physical pixel.

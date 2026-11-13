@@ -2,7 +2,7 @@ use core::f64;
 use std::rc::Rc;
 
 use niri_config::utils::MergeWith as _;
-use niri_config::{Color, CornerRadius, GradientInterpolation};
+use niri_config::{Color, CornerRadius, FocusRingCanvasStyle, GradientInterpolation};
 use niri_ipc::WindowLayout;
 use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
@@ -11,6 +11,7 @@ use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
+use super::title_bar::{TitleBar, TitleBarRenderElement};
 use super::{
     HitType, LayoutElement, LayoutElementRenderElement, LayoutElementRenderSnapshot, Options,
     SizeFrac, RESIZE_ANIMATION_THRESHOLD,
@@ -49,6 +50,9 @@ pub struct Tile<W: LayoutElement> {
 
     /// The shadow around the window.
     shadow: Shadow,
+
+    /// rice: compositor-drawn title strip above the window.
+    title_bar: TitleBar,
 
     /// This tile's current sizing mode.
     ///
@@ -137,6 +141,7 @@ niri_render_elements! {
         Offscreen = OffscreenRenderElement,
         ExtraDamage = ExtraDamage,
         BackgroundEffect = BackgroundEffectElement,
+        TitleBar = TitleBarRenderElement, // rice
     }
 }
 
@@ -191,17 +196,27 @@ impl<W: LayoutElement> Tile<W> {
         options: Rc<Options>,
     ) -> Self {
         let rules = window.rules();
-        let border_config = options.layout.border.merged_with(&rules.border);
-        let focus_ring_config = options.layout.focus_ring.merged_with(&rules.focus_ring);
+        let mut border_config = options.layout.border.merged_with(&rules.border);
+        let mut focus_ring_config = options.layout.focus_ring.merged_with(&rules.focus_ring);
+        apply_canvas_focus_style(&options, &mut border_config, &mut focus_ring_config); // rice
         let shadow_config = options.layout.shadow.merged_with(&rules.shadow);
         let sizing_mode = window.sizing_mode();
         let fullscreen_backdrop_color = options.layout.fullscreen_backdrop_color;
+        // rice: title strip.
+        let mut title_bar = TitleBar::new(&options.layout.title_bar, rules.title_bar, scale);
+        title_bar.update_config(
+            &options.layout.title_bar,
+            rules.title_bar,
+            scale,
+            options.canvas_tile_zoom,
+        );
 
         Self {
             window,
             border: FocusRing::new(border_config.into()),
             focus_ring: FocusRing::new(focus_ring_config),
             shadow: Shadow::new(shadow_config),
+            title_bar,
             sizing_mode,
             fullscreen_backdrop: SolidColorBuffer::new((0., 0.), fullscreen_backdrop_color),
             restore_to_floating: false,
@@ -251,14 +266,24 @@ impl<W: LayoutElement> Tile<W> {
         let rules = self.window.rules();
 
         let mut border_config = self.options.layout.border.merged_with(&rules.border);
-        border_config.width = round_max1(border_config.width);
-        self.border.update_config(border_config.into());
-
         let mut focus_ring_config = self
             .options
             .layout
             .focus_ring
             .merged_with(&rules.focus_ring);
+        // rice: canvas focus style, focus ring gap and title strip.
+        apply_canvas_focus_style(&self.options, &mut border_config, &mut focus_ring_config);
+        focus_ring_config.gap = round_logical_in_physical(self.scale, focus_ring_config.gap);
+        self.title_bar.update_config(
+            &self.options.layout.title_bar,
+            rules.title_bar,
+            self.scale,
+            self.options.canvas_tile_zoom,
+        );
+
+        border_config.width = round_max1(border_config.width);
+        self.border.update_config(border_config.into());
+
         focus_ring_config.width = round_max1(focus_ring_config.width);
         self.focus_ring.update_config(focus_ring_config);
 
@@ -272,6 +297,7 @@ impl<W: LayoutElement> Tile<W> {
         self.border.update_shaders();
         self.focus_ring.update_shaders();
         self.shadow.update_shaders();
+        self.title_bar.update_shaders(); // rice
     }
 
     pub fn update_window(&mut self) {
@@ -295,10 +321,14 @@ impl<W: LayoutElement> Tile<W> {
                 if prev_sizing_mode.is_fullscreen() {
                     tile_size.w = f64::max(tile_size.w, self.view_size.w);
                     tile_size.h = f64::max(tile_size.h, self.view_size.h);
-                } else if prev_sizing_mode.is_normal() && !self.border.is_off() {
-                    let width = self.border.width();
-                    tile_size.w += width * 2.;
-                    tile_size.h += width * 2.;
+                } else if prev_sizing_mode.is_normal() {
+                    if !self.border.is_off() {
+                        let width = self.border.width();
+                        tile_size.w += width * 2.;
+                        tile_size.h += width * 2.;
+                    }
+                    // rice: title strip.
+                    tile_size.h += self.title_bar.height().unwrap_or(0.);
                 }
 
                 tile_size.w = tile_size_from.w + (tile_size.w - tile_size_from.w) * val;
@@ -334,10 +364,14 @@ impl<W: LayoutElement> Tile<W> {
                 if prev_sizing_mode.is_fullscreen() {
                     tile_size.w = f64::max(tile_size.w, self.view_size.w);
                     tile_size.h = f64::max(tile_size.h, self.view_size.h);
-                } else if prev_sizing_mode.is_normal() && !self.border.is_off() {
-                    let width = self.border.width();
-                    tile_size.w += width * 2.;
-                    tile_size.h += width * 2.;
+                } else if prev_sizing_mode.is_normal() {
+                    if !self.border.is_off() {
+                        let width = self.border.width();
+                        tile_size.w += width * 2.;
+                        tile_size.h += width * 2.;
+                    }
+                    // rice: title strip.
+                    tile_size.h += self.title_bar.height().unwrap_or(0.);
                 }
 
                 let fullscreen_from = if prev_sizing_mode.is_fullscreen() {
@@ -401,14 +435,24 @@ impl<W: LayoutElement> Tile<W> {
 
         let rules = self.window.rules();
         let mut border_config = self.options.layout.border.merged_with(&rules.border);
-        border_config.width = round_max1(border_config.width);
-        self.border.update_config(border_config.into());
-
         let mut focus_ring_config = self
             .options
             .layout
             .focus_ring
             .merged_with(&rules.focus_ring);
+        // rice: canvas focus style, focus ring gap and title strip.
+        apply_canvas_focus_style(&self.options, &mut border_config, &mut focus_ring_config);
+        focus_ring_config.gap = round_logical_in_physical(self.scale, focus_ring_config.gap);
+        self.title_bar.update_config(
+            &self.options.layout.title_bar,
+            rules.title_bar,
+            self.scale,
+            self.options.canvas_tile_zoom,
+        );
+
+        border_config.width = round_max1(border_config.width);
+        self.border.update_config(border_config.into());
+
         focus_ring_config.width = round_max1(focus_ring_config.width);
         self.focus_ring.update_config(focus_ring_config);
 
@@ -417,8 +461,7 @@ impl<W: LayoutElement> Tile<W> {
 
         let window_size = self.window_size();
         let radius = self
-            .window
-            .geometry_corner_radius()
+            .window_content_radius(self.window.geometry_corner_radius()) // rice
             .fit_to(window_size.w as f32, window_size.h as f32);
         self.rounded_corner_damage.set_corner_radius(radius);
     }
@@ -558,6 +601,21 @@ impl<W: LayoutElement> Tile<W> {
             self.scale,
             1. - expanded_progress as f32,
         );
+
+        // rice: title strip.
+        if self.title_bar.is_enabled() {
+            let (title, subtitle) = self.window.title_bar_text();
+            self.title_bar.set_text(title, subtitle);
+            let radius = self
+                .window
+                .geometry_corner_radius()
+                .scaled_by(1. - expanded_progress as f32);
+            self.title_bar.update_render_elements(
+                self.animated_window_size().w,
+                radius,
+                1. - expanded_progress as f32,
+            );
+        }
 
         self.fullscreen_backdrop.resize(animated_tile_size);
     }
@@ -783,6 +841,51 @@ impl<W: LayoutElement> Tile<W> {
         Some(self.border.width())
     }
 
+    /// rice: height of the title strip when the tile shows it (normal sizing mode only).
+    pub fn effective_title_bar_height(&self) -> Option<f64> {
+        if !self.sizing_mode.is_normal() {
+            return None;
+        }
+        self.title_bar.height()
+    }
+
+    /// rice: title strip height as drawn; it shrinks to zero while expanding to fullscreen or
+    /// maximized.
+    fn visual_title_bar_height(&self) -> f64 {
+        let Some(height) = self.title_bar.height() else {
+            return 0.;
+        };
+        height * (1. - self.expanded_progress())
+    }
+
+    /// rice: rectangle of the title strip within the tile, when the tile shows one.
+    pub fn title_bar_rect(&self) -> Option<Rectangle<f64, Logical>> {
+        let height = self.effective_title_bar_height()?;
+        let loc = self.window_loc();
+        Some(Rectangle::new(
+            Point::from((loc.x, loc.y - height)),
+            Size::from((self.animated_window_size().w, height)),
+        ))
+    }
+
+    /// rice: corner radius of the window content: with a title strip above it, the strip takes
+    /// the top corners.
+    fn window_content_radius(&self, radius: CornerRadius) -> CornerRadius {
+        if self.visual_title_bar_height() > 0. {
+            CornerRadius {
+                top_left: 0.,
+                top_right: 0.,
+                ..radius
+            }
+        } else {
+            radius
+        }
+    }
+
+    pub fn title_bar(&self) -> &TitleBar {
+        &self.title_bar
+    }
+
     /// Returns the location of the window's visual geometry within this Tile.
     pub fn window_loc(&self) -> Point<f64, Logical> {
         let mut loc = Point::from((0., 0.));
@@ -799,7 +902,9 @@ impl<W: LayoutElement> Tile<W> {
         // - During animations, the window remains centered within the tile; this is important for
         //   the to/from fullscreen animation.
         loc.x += (target_size.w - window_size.w) / 2.;
-        loc.y += (target_size.h - window_size.h) / 2.;
+        // rice: the title strip sits above the window; it shrinks away while expanding.
+        let strip = self.visual_title_bar_height();
+        loc.y += strip + (target_size.h - strip - window_size.h) / 2.;
 
         // Round to physical pixels.
         loc = loc
@@ -825,6 +930,11 @@ impl<W: LayoutElement> Tile<W> {
             size.h += width * 2.;
         }
 
+        // rice: title strip.
+        if let Some(height) = self.effective_title_bar_height() {
+            size.h += height;
+        }
+
         size
     }
 
@@ -842,6 +952,11 @@ impl<W: LayoutElement> Tile<W> {
         if let Some(width) = self.effective_border_width() {
             size.w += width * 2.;
             size.h += width * 2.;
+        }
+
+        // rice: title strip.
+        if let Some(height) = self.effective_title_bar_height() {
+            size.h += height;
         }
 
         size
@@ -935,6 +1050,12 @@ impl<W: LayoutElement> Tile<W> {
         if self.is_in_input_region(point) {
             let win_pos = self.buf_loc() + offset;
             Some(HitType::Input { win_pos })
+        } else if self
+            .title_bar_rect()
+            .is_some_and(|rect| rect.contains(point))
+        {
+            // rice: the title strip activates and drags the window.
+            Some(HitType::TitleBar)
         } else if self.is_in_activation_region(point) {
             Some(HitType::Activate {
                 is_tab_indicator: false,
@@ -955,6 +1076,10 @@ impl<W: LayoutElement> Tile<W> {
             let width = self.border.width();
             size.w = f64::max(1., size.w - width * 2.);
             size.h = f64::max(1., size.h - width * 2.);
+        }
+        // rice: title strip.
+        if let Some(height) = self.title_bar.height() {
+            size.h = f64::max(1., size.h - height);
         }
 
         // The size request has to be i32 unfortunately, due to Wayland. We floor here instead of
@@ -977,6 +1102,8 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn tile_height_for_window_height(&self, size: f64) -> f64 {
+        // rice: title strip.
+        let size = size + self.title_bar.height().unwrap_or(0.);
         if self.border.is_off() {
             size
         } else {
@@ -993,6 +1120,8 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn window_height_for_tile_height(&self, size: f64) -> f64 {
+        // rice: title strip.
+        let size = size - self.title_bar.height().unwrap_or(0.);
         if self.border.is_off() {
             size
         } else {
@@ -1037,6 +1166,11 @@ impl<W: LayoutElement> Tile<W> {
             size.h += width * 2.;
         }
 
+        // rice: title strip.
+        if let Some(height) = self.title_bar.height() {
+            size.h = f64::max(1., size.h) + height;
+        }
+
         size
     }
 
@@ -1052,6 +1186,13 @@ impl<W: LayoutElement> Tile<W> {
             }
             if size.h > 0. {
                 size.h += width * 2.;
+            }
+        }
+
+        // rice: title strip.
+        if let Some(height) = self.title_bar.height() {
+            if size.h > 0. {
+                size.h += height;
             }
         }
 
@@ -1120,6 +1261,7 @@ impl<W: LayoutElement> Tile<W> {
             .window
             .geometry_corner_radius()
             .scaled_by(1. - expanded_progress as f32);
+        let radius = self.window_content_radius(radius); // rice
 
         // Popups go on top, whether it's resize or not.
         self.window.render_popups(
@@ -1282,6 +1424,16 @@ impl<W: LayoutElement> Tile<W> {
             self.window
                 .render_normal(ctx.r(), window_render_loc, scale, win_alpha, &mut |elem| {
                     push(clip(elem))
+                });
+        }
+
+        // rice: title strip, glued to the top of the window, under the window and its popups.
+        if let Some(height) = self.title_bar.height().filter(|_| expanded_progress < 1.) {
+            let strip_loc = window_render_loc - Point::from((0., height));
+            let hide_text = ctx.target.should_block_out(rules.block_out_from);
+            self.title_bar
+                .render(ctx.renderer, strip_loc, hide_text, &mut |elem| {
+                    push(elem.into())
                 });
         }
 
@@ -1601,5 +1753,30 @@ impl<W: LayoutElement> Tile<W> {
         let rounded = size.to_physical_precise_round(scale).to_logical(scale);
         assert_abs_diff_eq!(size.w, rounded.w, epsilon = 1e-5);
         assert_abs_diff_eq!(size.h, rounded.h, epsilon = 1e-5);
+    }
+}
+
+/// rice: on canvas workspaces, `focus-ring { canvas-style }` can replace the focus ring by the
+/// window border in the ring's active colour, or hide it.
+fn apply_canvas_focus_style(
+    options: &Options,
+    border: &mut niri_config::Border,
+    focus_ring: &mut niri_config::FocusRing,
+) {
+    if options.canvas_tile_zoom.is_none() {
+        return;
+    }
+
+    match focus_ring.canvas_style {
+        FocusRingCanvasStyle::Ring => (),
+        FocusRingCanvasStyle::Off => focus_ring.off = true,
+        FocusRingCanvasStyle::Border => {
+            // Without a border there is nothing to recolour: keep the ring.
+            if !border.off {
+                border.active_color = focus_ring.active_color;
+                border.active_gradient = focus_ring.active_gradient;
+                focus_ring.off = true;
+            }
+        }
     }
 }

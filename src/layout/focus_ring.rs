@@ -20,6 +20,8 @@ pub struct FocusRing {
     use_border_shader: bool,
     config: niri_config::FocusRing,
     thicken_corners: bool,
+    /// rice: gap between the window and the ring used by the last update.
+    gap: f64,
 }
 
 niri_render_elements! {
@@ -41,6 +43,7 @@ impl FocusRing {
             use_border_shader: false,
             config,
             thicken_corners: true,
+            gap: 0.,
         }
     }
 
@@ -67,6 +70,36 @@ impl FocusRing {
         alpha: f32,
     ) {
         let width = self.config.width;
+
+        // rice: with a gap, the ring goes around the window grown by the gap on every side,
+        // with concentric corners, and is always drawn as a border (never as a background).
+        let gap = self.config.gap.max(0.);
+        self.gap = gap;
+        let (win_size, view_rect, is_border, radius) = if gap > 0. {
+            let grow = |r: f32| {
+                if r > 0. {
+                    r + gap as f32
+                } else {
+                    (gap + width) as f32
+                }
+            };
+            let radius = CornerRadius {
+                top_left: grow(radius.top_left),
+                top_right: grow(radius.top_right),
+                bottom_right: grow(radius.bottom_right),
+                bottom_left: grow(radius.bottom_left),
+            };
+            let view_rect = Rectangle::new(view_rect.loc + Point::from((gap, gap)), view_rect.size);
+            (
+                win_size + Size::from((gap, gap)).upscale(2.),
+                view_rect,
+                true,
+                radius,
+            )
+        } else {
+            (win_size, view_rect, is_border, radius)
+        };
+
         self.full_size = win_size + Size::from((width, width)).upscale(2.);
         self.is_border = is_border;
 
@@ -226,6 +259,8 @@ impl FocusRing {
         }
 
         let border_width = -self.locations[0].y;
+        // rice: the elements are laid out around the window grown by the gap.
+        let location = location - Point::from((self.gap, self.gap));
 
         // If drawing as a border with width = 0, then there's nothing to draw.
         if self.is_border && border_width == 0. {
@@ -272,5 +307,72 @@ impl FocusRing {
 
     pub fn config(&self) -> &niri_config::FocusRing {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ring(width: f64, gap: f64) -> FocusRing {
+        FocusRing::new(niri_config::FocusRing {
+            width,
+            gap,
+            ..Default::default()
+        })
+    }
+
+    /// Outer rectangle of the drawn ring relative to the tile, and whether it is a border.
+    fn outer(ring: &FocusRing) -> (Rectangle<f64, Logical>, bool) {
+        let loc = ring.locations[4] - Point::from((ring.gap, ring.gap));
+        (Rectangle::new(loc, ring.full_size), ring.is_border)
+    }
+
+    #[test]
+    fn no_gap_is_upstream() {
+        let mut ring = ring(4., 0.);
+        let size = Size::from((100., 50.));
+        let view = Rectangle::from_size(Size::from((1000., 1000.)));
+        ring.update_render_elements(size, true, false, false, view, Default::default(), 1., 1.);
+        assert_eq!(ring.gap, 0.);
+        assert!(!ring.is_border);
+        assert_eq!(ring.locations[0], Point::from((-4., -4.)));
+        assert_eq!(ring.full_size, Size::from((108., 58.)));
+    }
+
+    #[test]
+    fn gap_moves_ring_outwards() {
+        let mut ring = ring(1., 4.);
+        let size = Size::from((100., 50.));
+        let view = Rectangle::from_size(Size::from((1000., 1000.)));
+        // Even when asked to draw as a background, a ring with a gap is a border.
+        ring.update_render_elements(size, true, false, false, view, Default::default(), 1., 1.);
+        let (rect, is_border) = outer(&ring);
+        assert!(is_border);
+        assert_eq!(rect, Rectangle::new((-5., -5.).into(), (110., 60.).into()));
+
+        // Edges: the top edge starts after the (gap + width = 5) corner and sits 5 px above.
+        let top = Rectangle::new(
+            ring.locations[0] - Point::from((ring.gap, ring.gap)),
+            ring.sizes[0],
+        );
+        assert_eq!(top.loc.y, -5.);
+        assert_eq!(top.size.h, 1.);
+        // Square window corners get a concentric radius of gap + width.
+        assert_eq!(ring.sizes[4], Size::from((5., 5.)));
+    }
+
+    #[test]
+    fn gap_keeps_corners_concentric() {
+        let mut ring = ring(2., 4.);
+        let size = Size::from((100., 50.));
+        let view = Rectangle::from_size(Size::from((1000., 1000.)));
+        // The tile passes the window radius expanded by the ring width.
+        let radius = CornerRadius::from(8.).expanded_by(2.);
+        ring.update_render_elements(size, true, true, false, view, radius, 1., 1.);
+        // Outer radius: window radius 8 + gap 4 + width 2.
+        assert_eq!(ring.sizes[4], Size::from((14., 14.)));
+        let (rect, _) = outer(&ring);
+        assert_eq!(rect, Rectangle::new((-6., -6.).into(), (112., 62.).into()));
     }
 }

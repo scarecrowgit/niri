@@ -66,6 +66,7 @@ use crate::window::mapped::MappedId;
 pub mod backend_ext;
 pub mod canvas_actions; // rice
 pub mod click_grab;
+mod decor_actions; // rice
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -74,6 +75,7 @@ pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
 pub mod spatial_movement_grab;
 pub mod swipe_tracker;
+mod title_bar_click; // rice
 pub mod touch_overview_grab;
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
@@ -2801,6 +2803,10 @@ impl State {
             | Action::ToggleWindowPinnedById(_)) => {
                 self.do_canvas_action(action);
             }
+            // rice: named canvas regions.
+            action @ (Action::CanvasAddRegion(..) | Action::CanvasRemoveRegion(_)) => {
+                self.do_decor_action(action);
+            }
         }
 
         // rice: canvas reveal / edge-push after keyboard focus and move actions.
@@ -3333,6 +3339,16 @@ impl State {
                     // scrolling when e.g. Mod+MMB clicking on a partially off-screen window.
                     return;
                 }
+            }
+
+            // rice: pressing a compositor-drawn title bar activates and drags the window.
+            if button == Some(MouseButton::Left)
+                && !pointer.is_grabbed()
+                && !is_overview_open
+                && !mod_down
+                && !self.niri.screenshot_ui.is_open()
+            {
+                self.title_bar_press(button_code, serial, pointer.current_location());
             }
 
             if let Some(mapped) = self.niri.window_under_cursor() {

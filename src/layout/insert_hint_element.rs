@@ -23,6 +23,7 @@ impl InsertHintElement {
                 active_gradient: config.gradient,
                 inactive_gradient: config.gradient,
                 urgent_gradient: config.gradient,
+                ..Default::default() // rice: gap, canvas style
             }),
         }
     }
@@ -37,6 +38,7 @@ impl InsertHintElement {
             active_gradient: config.gradient,
             inactive_gradient: config.gradient,
             urgent_gradient: config.gradient,
+            ..Default::default() // rice: gap, canvas style
         });
     }
 

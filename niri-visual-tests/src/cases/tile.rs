@@ -55,9 +55,35 @@ impl Tile {
         rv
     }
 
-    pub fn with_window(args: Args, window: TestWindow) -> Self {
-        let Args { size, clock } = args;
+    /// rice: title strip and a focus ring 4 px outside the window.
+    pub fn title_bar_with_ring_gap(args: Args) -> Self {
+        let window = TestWindow::freeform(0);
+        let options = Options {
+            layout: niri_config::Layout {
+                focus_ring: niri_config::FocusRing {
+                    width: 2.,
+                    gap: 4.,
+                    active_color: Color::from_rgba8_unpremul(0xe0, 0xa4, 0x58, 255),
+                    ..Default::default()
+                },
+                border: niri_config::Border {
+                    off: false,
+                    width: 1.,
+                    active_color: Color::from_rgba8_unpremul(0x2a, 0x2a, 0x27, 255),
+                    ..Default::default()
+                },
+                title_bar: niri_config::TitleBar {
+                    off: false,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        Self::with_window_and_options(args, window, options)
+    }
 
+    pub fn with_window(args: Args, window: TestWindow) -> Self {
         let options = Options {
             layout: niri_config::Layout {
                 focus_ring: niri_config::FocusRing {
@@ -74,6 +100,11 @@ impl Tile {
             },
             ..Default::default()
         };
+        Self::with_window_and_options(args, window, options)
+    }
+
+    fn with_window_and_options(args: Args, window: TestWindow, options: Options) -> Self {
+        let Args { size, clock } = args;
 
         let mut tile = niri::layout::tile::Tile::new(
             window.clone(),

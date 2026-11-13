@@ -578,6 +578,15 @@ pub enum Action {
     ToggleWindowPinned,
     #[knuffel(skip)]
     ToggleWindowPinnedById(u64),
+    // rice: named canvas regions.
+    CanvasAddRegion(
+        #[knuffel(argument)] String,
+        #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
+        #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
+        #[knuffel(argument)] FloatOrInt<1, { i32::MAX }>,
+        #[knuffel(argument)] FloatOrInt<1, { i32::MAX }>,
+    ),
+    CanvasRemoveRegion(#[knuffel(argument)] String),
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -940,6 +949,15 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ToggleWindowPinned { id: Some(id) } => {
                 Self::ToggleWindowPinnedById(id)
             }
+            // rice: named canvas regions.
+            niri_ipc::Action::CanvasAddRegion { name, x, y, w, h } => Self::CanvasAddRegion(
+                name,
+                FloatOrInt(x),
+                FloatOrInt(y),
+                FloatOrInt(w),
+                FloatOrInt(h),
+            ),
+            niri_ipc::Action::CanvasRemoveRegion { name } => Self::CanvasRemoveRegion(name),
         }
     }
 }

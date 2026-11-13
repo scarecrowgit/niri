@@ -5,6 +5,7 @@ use crate::appearance::{
     Border, FocusRing, InsertHint, Shadow, TabIndicator, DEFAULT_BACKGROUND_COLOR,
 };
 use crate::canvas::{Canvas, CanvasPart, WorkspaceMode};
+use crate::decorations::{TitleBar, TitleBarPart};
 use crate::utils::{expect_only_children, Flag, MergeWith};
 use crate::{BorderRule, Color, FloatOrInt, InsertHintPart, ShadowRule, TabIndicatorPart};
 
@@ -29,6 +30,8 @@ pub struct Layout {
     // rice: infinite canvas workspace mode.
     pub default_workspace_mode: WorkspaceMode,
     pub canvas: Canvas,
+    // rice: compositor-drawn title strips.
+    pub title_bar: TitleBar,
 }
 
 impl Default for Layout {
@@ -60,6 +63,7 @@ impl Default for Layout {
             fullscreen_backdrop_color: Color::from_array_unpremul([0., 0., 0., 1.]),
             default_workspace_mode: WorkspaceMode::default(),
             canvas: Canvas::default(),
+            title_bar: TitleBar::default(),
         }
     }
 }
@@ -77,6 +81,7 @@ impl MergeWith<LayoutPart> for Layout {
             empty_workspace_above_first,
             gaps,
             canvas,
+            title_bar, // rice
         );
 
         merge_clone!(
@@ -144,6 +149,9 @@ pub struct LayoutPart {
     pub default_workspace_mode: Option<WorkspaceMode>,
     #[knuffel(child)]
     pub canvas: Option<CanvasPart>,
+    // rice: compositor-drawn title strips.
+    #[knuffel(child)]
+    pub title_bar: Option<TitleBarPart>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]

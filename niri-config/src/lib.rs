@@ -33,6 +33,7 @@ pub mod appearance;
 pub mod binds;
 pub mod canvas;
 pub mod debug;
+pub mod decorations; // rice
 pub mod error;
 pub mod gestures;
 pub mod input;
@@ -50,6 +51,9 @@ pub use crate::appearance::*;
 pub use crate::binds::*;
 pub use crate::canvas::{Canvas, CanvasPart, WorkspaceMode};
 pub use crate::debug::Debug;
+pub use crate::decorations::{
+    CanvasDecor, CanvasGrid, CanvasRegion, FocusRingCanvasStyle, TitleBar, TitleBarPart,
+}; // rice
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
@@ -1833,6 +1837,8 @@ mod tests {
                     ),
                     inactive_gradient: None,
                     urgent_gradient: None,
+                    gap: 0.0,
+                    canvas_style: Ring,
                 },
                 border: Border {
                     off: false,
@@ -2008,6 +2014,63 @@ mod tests {
                         1.0,
                     ],
                     pan_step: 120.0,
+                    decor: CanvasDecor {
+                        grid: Off,
+                        grid_spacing: 80.0,
+                        grid_color: Color {
+                            r: 0.08627451,
+                            g: 0.08627451,
+                            b: 0.08235294,
+                            a: 1.0,
+                        },
+                        grid_line_width: 1.0,
+                        background_color: None,
+                        region_color: Color {
+                            r: 0.16470589,
+                            g: 0.16470589,
+                            b: 0.15294118,
+                            a: 1.0,
+                        },
+                        region_label_color: Color {
+                            r: 0.5882353,
+                            g: 0.5764706,
+                            b: 0.54509807,
+                            a: 1.0,
+                        },
+                        region_font: "monospace 16",
+                        regions: [],
+                    },
+                },
+                title_bar: TitleBar {
+                    off: true,
+                    height: 28.0,
+                    font: "monospace 11",
+                    padding: 12.0,
+                    line_width: 1.0,
+                    background_color: Color {
+                        r: 0.105882354,
+                        g: 0.105882354,
+                        b: 0.09803922,
+                        a: 1.0,
+                    },
+                    text_color: Color {
+                        r: 0.85490197,
+                        g: 0.84313726,
+                        b: 0.8117647,
+                        a: 1.0,
+                    },
+                    muted_color: Color {
+                        r: 0.5882353,
+                        g: 0.5764706,
+                        b: 0.54509807,
+                        a: 1.0,
+                    },
+                    line_color: Color {
+                        r: 0.16470589,
+                        g: 0.16470589,
+                        b: 0.15294118,
+                        a: 1.0,
+                    },
                 },
             },
             prefer_no_csd: true,
@@ -2373,6 +2436,8 @@ mod tests {
                         active_gradient: None,
                         inactive_gradient: None,
                         urgent_gradient: None,
+                        gap: None,
+                        canvas_style: None,
                     },
                     border: BorderRule {
                         off: false,
@@ -2388,6 +2453,8 @@ mod tests {
                         active_gradient: None,
                         inactive_gradient: None,
                         urgent_gradient: None,
+                        gap: None,
+                        canvas_style: None,
                     },
                     shadow: ShadowRule {
                         off: false,
@@ -2460,6 +2527,7 @@ mod tests {
                             saturation: None,
                         },
                     },
+                    title_bar: None,
                 },
             ],
             layer_rules: [

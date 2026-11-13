@@ -959,10 +959,12 @@ impl XdgShellHandler for State {
 
     fn app_id_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
+        self.redraw_title_bar(&toplevel); // rice
     }
 
     fn title_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
+        self.redraw_title_bar(&toplevel); // rice
     }
 
     fn parent_changed(&mut self, toplevel: ToplevelSurface) {
@@ -1434,6 +1436,21 @@ impl State {
                 }
                 PopupKind::InputMethod(_) => (),
             }
+        }
+    }
+
+    /// rice: compositor-drawn title bars show the title and app id.
+    fn redraw_title_bar(&mut self, toplevel: &ToplevelSurface) {
+        if self.niri.config.borrow().layout.title_bar.off {
+            return;
+        }
+        if let Some((_, Some(output))) = self
+            .niri
+            .layout
+            .find_window_and_output(toplevel.wl_surface())
+        {
+            let output = output.clone();
+            self.niri.queue_redraw(&output);
         }
     }
 

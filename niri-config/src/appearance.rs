@@ -5,6 +5,7 @@ use knuffel::errors::DecodeError;
 use miette::{miette, IntoDiagnostic as _};
 use smithay::backend::renderer::Color32F;
 
+use crate::decorations::FocusRingCanvasStyle;
 use crate::utils::{Flag, MergeWith};
 use crate::FloatOrInt;
 
@@ -238,6 +239,10 @@ pub struct FocusRing {
     pub active_gradient: Option<Gradient>,
     pub inactive_gradient: Option<Gradient>,
     pub urgent_gradient: Option<Gradient>,
+    /// rice: space between the window and the ring, in logical pixels.
+    pub gap: f64,
+    /// rice: how the focus is shown on canvas workspaces.
+    pub canvas_style: FocusRingCanvasStyle,
 }
 
 impl Default for FocusRing {
@@ -251,6 +256,8 @@ impl Default for FocusRing {
             active_gradient: None,
             inactive_gradient: None,
             urgent_gradient: None,
+            gap: 0.,
+            canvas_style: FocusRingCanvasStyle::Ring,
         }
     }
 }
@@ -293,6 +300,8 @@ impl From<Border> for FocusRing {
             active_gradient: value.active_gradient,
             inactive_gradient: value.inactive_gradient,
             urgent_gradient: value.urgent_gradient,
+            gap: 0.,
+            canvas_style: FocusRingCanvasStyle::Ring,
         }
     }
 }
@@ -332,9 +341,15 @@ impl MergeWith<BorderRule> for Border {
 
 impl MergeWith<BorderRule> for FocusRing {
     fn merge_with(&mut self, part: &BorderRule) {
+        // rice: keep the focus-ring-only fields across the conversion.
+        let (gap, canvas_style) = (self.gap, self.canvas_style);
         let mut x = Border::from(*self);
         x.merge_with(part);
-        *self = FocusRing::from(x);
+        *self = FocusRing {
+            gap: part.gap.map_or(gap, |x| x.0),
+            canvas_style: part.canvas_style.unwrap_or(canvas_style),
+            ..FocusRing::from(x)
+        };
     }
 }
 
@@ -642,6 +657,12 @@ pub struct BorderRule {
     pub inactive_gradient: Option<Gradient>,
     #[knuffel(child)]
     pub urgent_gradient: Option<Gradient>,
+    /// rice: focus ring only, see [`FocusRing::gap`].
+    #[knuffel(child, unwrap(argument))]
+    pub gap: Option<FloatOrInt<0, 65535>>,
+    /// rice: focus ring only, see [`FocusRing::canvas_style`].
+    #[knuffel(child, unwrap(argument))]
+    pub canvas_style: Option<FocusRingCanvasStyle>,
 }
 
 #[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
@@ -684,7 +705,7 @@ impl MergeWith<Self> for BorderRule {
     fn merge_with(&mut self, part: &Self) {
         merge_on_off!((self, part));
 
-        merge_clone_opt!((self, part), width);
+        merge_clone_opt!((self, part), width, gap, canvas_style); // rice: gap, canvas_style
 
         merge_color_gradient_opt!(
             (self, part),

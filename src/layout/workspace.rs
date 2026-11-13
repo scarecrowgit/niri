@@ -19,6 +19,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
 use super::canvas::WorkspaceCanvas;
+use super::canvas_grid::CanvasDecorRenderElement; // rice
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
@@ -47,6 +48,8 @@ use crate::window::ResolvedWindowRules;
 
 // rice: infinite canvas mode (new `impl Workspace` methods live there).
 mod canvas_ext;
+// rice: canvas plane grid and regions.
+mod canvas_decor;
 
 #[derive(Debug)]
 pub struct Workspace<W: LayoutElement> {
@@ -157,6 +160,8 @@ niri_render_elements! {
         Floating = FloatingSpaceRenderElement<R>,
         // rice: canvas windows scaled by the canvas zoom.
         Canvas = RescaleRenderElement<FloatingSpaceRenderElement<R>>,
+        // rice: canvas plane grid and regions.
+        CanvasDecor = CanvasDecorRenderElement,
     }
 }
 
@@ -422,6 +427,8 @@ impl<W: LayoutElement> Workspace<W> {
                 self.scale.fractional_scale(),
                 1.,
             );
+
+            self.canvas_update_decorations(); // rice
         }
     }
 
@@ -475,6 +482,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.update_shaders();
         self.floating.update_shaders();
         self.shadow.update_shaders();
+        self.canvas.decor.update_shaders(); // rice
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> + '_ {
@@ -1734,17 +1742,25 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn render_scrolling<R: NiriRenderer>(
         &self,
-        ctx: RenderCtx<R>,
+        mut ctx: RenderCtx<R>,
         xray_pos: XrayPos,
         focus_ring: bool,
         layer: RenderLayer,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
         let scrolling_focus_ring = focus_ring && !self.floating_is_active();
-        self.scrolling
-            .render(ctx, xray_pos, scrolling_focus_ring, layer, &mut |elem| {
-                push(elem.into())
-            });
+        self.scrolling.render(
+            ctx.r(),
+            xray_pos,
+            scrolling_focus_ring,
+            layer,
+            &mut |elem| push(elem.into()),
+        );
+
+        // rice: canvas plane grid and regions under all windows.
+        if layer.is_normal() {
+            self.render_canvas_decorations(ctx.renderer, push);
+        }
     }
 
     pub fn render_floating<R: NiriRenderer>(

@@ -16,6 +16,7 @@ use super::*;
 
 mod animations;
 mod canvas; // rice
+mod decorations; // rice
 mod fullscreen;
 
 impl<W: LayoutElement> Default for Layout<W> {
@@ -350,10 +351,12 @@ prop_compose! {
     fn arbitrary_rules()(
         focus_ring in arbitrary_focus_ring(),
         border in arbitrary_border(),
+        title_bar in prop::option::of(any::<bool>()), // rice
     ) -> ResolvedWindowRules {
         ResolvedWindowRules {
             focus_ring,
             border,
+            title_bar,
             ..ResolvedWindowRules::default()
         }
     }
@@ -4019,11 +4022,20 @@ prop_compose! {
     fn arbitrary_focus_ring()(
         off in any::<bool>(),
         width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+        // rice: focus ring gap and canvas style.
+        gap in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+        canvas_style in prop::option::of(prop_oneof![
+            Just(niri_config::FocusRingCanvasStyle::Ring),
+            Just(niri_config::FocusRingCanvasStyle::Border),
+            Just(niri_config::FocusRingCanvasStyle::Off),
+        ]),
     ) -> niri_config::BorderRule {
         niri_config::BorderRule {
             off,
             on: !off,
             width,
+            gap,
+            canvas_style,
             ..Default::default()
         }
     }
@@ -4082,6 +4094,22 @@ prop_compose! {
     }
 }
 
+// rice: compositor-drawn title strips.
+prop_compose! {
+    fn arbitrary_title_bar()(
+        off in any::<bool>(),
+        height in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+        line_width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+    ) -> niri_config::TitleBarPart {
+        niri_config::TitleBarPart {
+            off,
+            height,
+            line_width,
+            ..Default::default()
+        }
+    }
+}
+
 prop_compose! {
     fn arbitrary_layout_part()(
         gaps in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
@@ -4094,9 +4122,11 @@ prop_compose! {
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
         default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
+        title_bar in prop::option::of(arbitrary_title_bar()), // rice
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             default_workspace_mode,
+            title_bar,
             gaps,
             struts,
             center_focused_column,
