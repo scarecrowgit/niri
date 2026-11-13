@@ -558,6 +558,15 @@ pub enum HitType {
         /// Whether the hit was on the tab indicator.
         is_tab_indicator: bool,
     },
+    /// rice: the hit is within the input region of a window drawn scaled by `zoom` (a zoomed
+    /// canvas). Events can be sent to it; surface-local coordinates are
+    /// `(pos - win_pos) / zoom`.
+    ScaledInput {
+        /// Position of the window's buffer as drawn (scaled view coordinates).
+        win_pos: Point<f64, Logical>,
+        /// Scale the window is drawn at; never exactly 1.
+        zoom: f64,
+    },
     /// rice: the hit is on the compositor-drawn title bar of a window: pressing activates the
     /// window, dragging moves it.
     TitleBar,
@@ -652,6 +661,7 @@ impl HitType {
             HitType::Input { win_pos } => *win_pos += offset,
             HitType::Activate { .. } => (),
             HitType::TitleBar => (), // rice
+            HitType::ScaledInput { win_pos, .. } => *win_pos += offset, // rice
         }
         self
     }
@@ -668,11 +678,27 @@ impl HitType {
 
     pub fn to_activate(self) -> Self {
         match self {
-            HitType::Input { .. } => HitType::Activate {
+            HitType::Input { .. } | HitType::ScaledInput { .. } => HitType::Activate {
                 is_tab_indicator: false,
             },
             HitType::Activate { .. } => self,
             HitType::TitleBar => self, // rice: title bars stay draggable through any zoom.
+        }
+    }
+
+    /// rice: turns an `Input` hit on a tile drawn scaled by `zoom` (around the origin of the
+    /// coordinates `win_pos` is in) into a hit in the scaled coordinates.
+    pub fn scaled(self, zoom: f64) -> Self {
+        match self {
+            HitType::Input { win_pos } if zoom != 1. => HitType::ScaledInput {
+                win_pos: win_pos.upscale(zoom),
+                zoom,
+            },
+            HitType::ScaledInput { win_pos, zoom: z } if zoom != 1. => HitType::ScaledInput {
+                win_pos: win_pos.upscale(zoom),
+                zoom: z * zoom,
+            },
+            other => other,
         }
     }
 }
@@ -2382,8 +2408,10 @@ impl<W: LayoutElement> Layout<W> {
     ) -> Option<(&W, HitType)> {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.output == *output {
+                // rice: over a canvas the tile is drawn at the canvas zoom.
+                let canvas_zoom = self.interactive_move_canvas_zoom(move_);
                 if self.overview_progress.is_some() {
-                    let zoom = self.overview_zoom();
+                    let zoom = self.overview_zoom() * canvas_zoom;
                     let tile_pos = move_.tile_render_location(zoom);
                     let pos_within_tile = (pos_within_output - tile_pos).downscale(zoom);
                     // During the overview animation, we cannot do input hits because we cannot
@@ -2391,6 +2419,13 @@ impl<W: LayoutElement> Layout<W> {
                     let (win, hit) =
                         HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
                     Some((win, hit.to_activate()))
+                } else if canvas_zoom != 1. {
+                    // rice: scaled input, like the canvas windows themselves.
+                    let tile_pos = move_.tile_render_location(canvas_zoom);
+                    let pos_within_tile = (pos_within_output - tile_pos).downscale(canvas_zoom);
+                    let (win, hit) =
+                        HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
+                    Some((win, hit.scaled(canvas_zoom).offset_win_pos(tile_pos)))
                 } else {
                     let tile_pos = move_.tile_render_location(1.);
                     HitType::hit_tile(&move_.tile, tile_pos, pos_within_output)
@@ -4032,7 +4067,9 @@ impl<W: LayoutElement> Layout<W> {
                             .unwrap();
 
                         let zoom = mon.overview_zoom();
-                        tile_pos = Some((ws_geo.loc + tile_offset.upscale(zoom), zoom));
+                        // rice: canvas tiles are additionally scaled by the canvas zoom.
+                        let tile_zoom = zoom * ws.canvas_zoom();
+                        tile_pos = Some((ws_geo.loc + tile_offset.upscale(tile_zoom), zoom));
                     }
                 }
 
@@ -4101,6 +4138,8 @@ impl<W: LayoutElement> Layout<W> {
                 };
 
                 if let Some((tile_pos, zoom)) = tile_pos {
+                    // rice: the tile is drawn at the zoom of the workspace under the pointer.
+                    let zoom = zoom * self.interactive_move_canvas_zoom(&data);
                     let new_tile_pos = data.tile_render_location(zoom);
                     data.tile
                         .animate_move_from((tile_pos - new_tile_pos).downscale(zoom));
@@ -4220,6 +4259,7 @@ impl<W: LayoutElement> Layout<W> {
         let Some(InteractiveMoveState::Moving(mut move_)) = self.interactive_move.take() else {
             unreachable!()
         };
+        let move_canvas_zoom = self.interactive_move_canvas_zoom(&move_); // rice
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();
@@ -4298,7 +4338,8 @@ impl<W: LayoutElement> Layout<W> {
                     };
 
                 let win_id = move_.tile.window().id().clone();
-                let tile_render_loc = move_.tile_render_location(zoom);
+                // rice: over a canvas the tile is drawn at the canvas zoom.
+                let tile_render_loc = move_.tile_render_location(zoom * move_canvas_zoom);
 
                 let ws_idx = match insert_ws {
                     InsertWorkspace::Existing(ws_id) => mon.idx_of_ws(ws_id).unwrap(),
@@ -4913,7 +4954,8 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        let zoom = self.overview_zoom();
+        // rice: over a canvas the tile is drawn at the canvas zoom.
+        let zoom = self.overview_zoom() * self.interactive_move_canvas_zoom(move_);
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
 

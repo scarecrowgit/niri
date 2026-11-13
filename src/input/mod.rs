@@ -45,6 +45,7 @@ use smithay::wayland::shell::wlr_layer::{self, Layer};
 use smithay::wayland::virtual_keyboard::VirtualKeyboardDevice;
 use touch_overview_grab::TouchOverviewGrab;
 
+use self::canvas_pan_grab::CanvasPanGrab;
 use self::move_grab::MoveGrab;
 use self::pick_color_grab::PickColorGrab;
 use self::pick_window_grab::PickWindowGrab;
@@ -65,6 +66,7 @@ use crate::window::mapped::MappedId;
 
 pub mod backend_ext;
 pub mod canvas_actions; // rice
+pub mod canvas_pan_grab; // rice
 pub mod click_grab;
 mod decor_actions; // rice
 pub mod move_grab;
@@ -2784,6 +2786,19 @@ impl State {
                     self.niri.test_action_count += 1;
                 }
             }
+            // rice: mode-dependent action.
+            Action::IfCanvas(mut actions) => {
+                let is_canvas = self
+                    .niri
+                    .layout
+                    .active_workspace()
+                    .is_some_and(|ws| ws.is_canvas());
+                let idx = if is_canvas { 0 } else { 1 };
+                if idx < actions.len() {
+                    let action = actions.swap_remove(idx);
+                    self.do_action(action, allow_when_locked, time);
+                }
+            }
             // rice: infinite canvas actions.
             action @ (Action::ToggleWorkspaceMode
             | Action::SetWorkspaceMode(_)
@@ -2792,8 +2807,8 @@ impl State {
             | Action::CanvasPanUp
             | Action::CanvasPanDown
             | Action::CanvasPanTo(..)
-            | Action::CanvasZoomIn
-            | Action::CanvasZoomOut
+            | Action::CanvasZoomIn(_)
+            | Action::CanvasZoomOut(_)
             | Action::CanvasSetZoom(_)
             | Action::CanvasFit
             | Action::CanvasHome
@@ -2903,13 +2918,22 @@ impl State {
                 if let Some(output) = grab.view_offset_output() {
                     return Some((output.clone(), true));
                 }
+            } else if let Some(grab) = grab.downcast_ref::<CanvasPanGrab>() {
+                // rice: canvas panning wraps around both axes.
+                return Some((grab.output().clone(), true));
             }
             None
         });
+        let canvas_pan_grab = pointer
+            .with_grab(|_, grab| grab.as_any().is::<CanvasPanGrab>())
+            .unwrap_or(false);
         if let Some((output, horizontal)) = spatial_grab.flatten() {
             if let Some(geo) = self.niri.global_space.output_geometry(&output) {
                 let geo = geo.to_f64();
-                if horizontal {
+                if canvas_pan_grab {
+                    new_pos.x = (new_pos.x - geo.loc.x).rem_euclid(geo.size.w) + geo.loc.x;
+                    new_pos.y = (new_pos.y - geo.loc.y).rem_euclid(geo.size.h) + geo.loc.y;
+                } else if horizontal {
                     new_pos.x = (new_pos.x - geo.loc.x).rem_euclid(geo.size.w) + geo.loc.x;
                     new_pos.y = new_pos.y.clamp(geo.loc.y, geo.loc.y + geo.size.h - 1.);
                 } else {
@@ -3003,6 +3027,9 @@ impl State {
 
         self.niri.pointer_contents.clone_from(&under);
 
+        // rice: relative motion over a window drawn scaled is scaled down like the position.
+        let rel_scale = under.scaled_input_zoom().unwrap_or(1.);
+
         pointer.motion(
             self,
             under.surface.clone(),
@@ -3017,8 +3044,8 @@ impl State {
             self,
             under.surface,
             &RelativeMotionEvent {
-                delta: event.delta(),
-                delta_unaccel: event.delta_unaccel(),
+                delta: event.delta().downscale(rel_scale),
+                delta_unaccel: event.delta_unaccel().downscale(rel_scale),
                 time: event.time(),
             },
         );
@@ -3317,6 +3344,7 @@ impl State {
 
                 if let Some((output, ws)) = output_ws {
                     let ws_id = ws.id();
+                    let is_canvas = ws.is_canvas() && !is_overview_open; // rice
 
                     self.niri.layout.focus_output(&output);
 
@@ -3326,8 +3354,18 @@ impl State {
                         button: button_code,
                         location,
                     };
-                    let grab = SpatialMovementGrab::new(start_data, output, ws_id, false);
-                    pointer.set_grab(self, grab, serial, Focus::Clear);
+                    // rice: Mod+MMB on a canvas pans it in 2D.
+                    let canvas_grab = is_canvas
+                        .then(|| {
+                            CanvasPanGrab::new(self, start_data.clone(), output.clone(), ws_id)
+                        })
+                        .flatten();
+                    if let Some(grab) = canvas_grab {
+                        pointer.set_grab(self, grab, serial, Focus::Clear);
+                    } else {
+                        let grab = SpatialMovementGrab::new(start_data, output, ws_id, false);
+                        pointer.set_grab(self, grab, serial, Focus::Clear);
+                    }
                     self.niri
                         .cursor_manager
                         .set_cursor_image(CursorImageStatus::Named(CursorIcon::AllScroll));
@@ -3459,6 +3497,30 @@ impl State {
 
                 if !is_overview_open {
                     self.niri.layout.activate_window(&window);
+                }
+
+                // FIXME: granular.
+                self.niri.queue_redraw_all();
+            } else if let Some((output, ws_id, _)) = (button == Some(MouseButton::Left)
+                && mod_down
+                && !is_overview_open
+                && !pointer.is_grabbed()
+                && !self.niri.pointer_over_top_layer())
+            .then(|| self.niri.canvas_under_cursor())
+            .flatten()
+            {
+                // rice: Mod+LMB on the empty canvas plane pans it.
+                let start_data = PointerGrabStartData {
+                    focus: None,
+                    button: button_code,
+                    location: pointer.current_location(),
+                };
+                self.niri.layout.focus_output(&output);
+                if let Some(grab) = CanvasPanGrab::new(self, start_data, output, ws_id) {
+                    pointer.set_grab(self, grab, serial, Focus::Clear);
+                    self.niri
+                        .cursor_manager
+                        .set_cursor_image(CursorImageStatus::Named(CursorIcon::Grabbing));
                 }
 
                 // FIXME: granular.
@@ -4440,10 +4502,18 @@ impl State {
                         };
 
                         if let Some((output, ws)) = output_ws {
-                            let ws_idx = self.niri.layout.find_workspace_by_id(ws.id()).unwrap().0;
-                            self.niri
-                                .layout
-                                .view_offset_gesture_begin(&output, Some(ws_idx), true);
+                            let ws_id = ws.id();
+                            // rice: on a canvas, the horizontal swipe pans in 2D instead.
+                            let canvas = ws.is_canvas() && !is_overview_open;
+                            if !(canvas && self.niri.layout.canvas_pan_gesture_begin(ws_id, true)) {
+                                let ws_idx =
+                                    self.niri.layout.find_workspace_by_id(ws_id).unwrap().0;
+                                self.niri.layout.view_offset_gesture_begin(
+                                    &output,
+                                    Some(ws_idx),
+                                    true,
+                                );
+                            }
                         }
                     } else {
                         self.niri
@@ -4461,6 +4531,19 @@ impl State {
             .niri
             .layout
             .workspace_switch_gesture_update(delta_y, timestamp, true);
+        if let Some(output) = res {
+            if let Some(output) = output {
+                self.niri.queue_redraw(&output);
+            }
+            handled = true;
+        }
+
+        // rice: canvas 2D pan.
+        let res = self.niri.layout.canvas_pan_gesture_update(
+            Point::from((delta_x, delta_y)),
+            timestamp,
+            true,
+        );
         if let Some(output) = res {
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
@@ -4526,6 +4609,15 @@ impl State {
             handled = true;
         }
 
+        // rice: canvas 2D pan; glides on unless cancelled.
+        let time = (!event.cancelled()).then(|| Duration::from_micros(event.time().micros()));
+        if let Some(output) = self.niri.layout.canvas_pan_gesture_end(time, Some(true)) {
+            if let Some(output) = output {
+                self.niri.queue_redraw(&output);
+            }
+            handled = true;
+        }
+
         let res = self.niri.layout.overview_gesture_end();
         if res {
             self.niri.queue_redraw_all();
@@ -4564,6 +4656,11 @@ impl State {
             pointer.frame(self);
         }
 
+        // rice: pinch zooms a canvas around the cursor.
+        if self.canvas_pinch_begin(event.fingers()) {
+            return;
+        }
+
         pointer.gesture_pinch_begin(
             self,
             &GesturePinchBeginEvent {
@@ -4575,6 +4672,11 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
+        // rice: pinch zooms a canvas around the cursor.
+        if self.canvas_pinch_update(event.scale()) {
+            return;
+        }
+
         let pointer = self.niri.seat.get_pointer().unwrap();
 
         if self.update_pointer_contents() {
@@ -4610,6 +4712,14 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
+        // rice: pinch zooms a canvas around the cursor.
+        if let Some(output) = self.niri.layout.canvas_zoom_gesture_end() {
+            if let Some(output) = output {
+                self.niri.queue_redraw(&output);
+            }
+            return;
+        }
+
         let serial = SERIAL_COUNTER.next_serial();
         let pointer = self.niri.seat.get_pointer().unwrap();
 
@@ -4705,7 +4815,8 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
 
-        let under = self.niri.contents_under(pos);
+        // rice: touch sequences keep their focus location, so scaled windows are activate-only.
+        let under = self.niri.contents_under(pos).without_scaled_input();
 
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
         let mods = self.niri.seat.get_keyboard().unwrap().modifier_state();
@@ -4865,7 +4976,7 @@ impl State {
             self.niri.queue_redraw(&output);
         }
 
-        let under = self.niri.contents_under(pos);
+        let under = self.niri.contents_under(pos).without_scaled_input(); // rice
         handle.motion(
             self,
             under.surface,

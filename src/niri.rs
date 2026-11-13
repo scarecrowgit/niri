@@ -612,6 +612,48 @@ pub struct PointContents {
     pub overview: bool,
 }
 
+impl PointContents {
+    /// rice: zoom of the window under the point if it receives input while drawn scaled (a
+    /// zoomed canvas).
+    pub fn scaled_input_zoom(&self) -> Option<f64> {
+        match self.window {
+            Some((_, HitType::ScaledInput { zoom, .. })) => Some(zoom),
+            _ => None,
+        }
+    }
+
+    /// rice: downgrades scaled input hits to activate-only, for input paths that cannot deliver
+    /// scaled coordinates (touch: smithay keeps the touch-down focus location for the whole
+    /// touch sequence).
+    pub fn without_scaled_input(mut self) -> Self {
+        if let Some((_, hit @ HitType::ScaledInput { .. })) = &mut self.window {
+            *hit = hit.to_activate();
+            self.surface = None;
+        }
+        self
+    }
+}
+
+/// rice: (sub)surface of a window drawn scaled by `zoom` with its buffer at `win_pos` under
+/// `pos` (`pos` and `win_pos` in the same scaled coordinates).
+///
+/// Returns the surface and the focus location for smithay. Smithay computes surface-local
+/// coordinates as `pos - location`, so the location is chosen such that this yields the
+/// scaled-down position `(pos - surface_origin) / zoom`. It depends on `pos`, which works because
+/// the pointer focus is recomputed on every motion event (and `ClickGrab` recomputes it for
+/// scaled surfaces while a button is held).
+pub fn scaled_surface_under(
+    window: &Window,
+    pos: Point<f64, Logical>,
+    win_pos: Point<f64, Logical>,
+    zoom: f64,
+) -> Option<(WlSurface, Point<f64, Logical>)> {
+    let pos_within_window = (pos - win_pos).downscale(zoom);
+    let (surface, surface_loc) = window.surface_under(pos_within_window, WindowSurfaceType::ALL)?;
+    let local = pos_within_window - surface_loc.to_f64();
+    Some((surface, pos - local))
+}
+
 #[derive(Debug, Default)]
 pub enum LockState {
     #[default]
@@ -3788,18 +3830,23 @@ impl Niri {
 
         let mapped_hit_data = |(mapped, hit): (&Mapped, HitType)| {
             let window = &mapped.window;
-            let surface_and_pos = if let HitType::Input { win_pos } = hit {
-                let win_pos_within_output = win_pos;
-                window
-                    .surface_under(
-                        pos_within_output - win_pos_within_output,
-                        WindowSurfaceType::ALL,
-                    )
-                    .map(|(s, pos_within_window)| {
-                        (s, pos_within_window.to_f64() + win_pos_within_output)
-                    })
-            } else {
-                None
+            let surface_and_pos = match hit {
+                HitType::Input { win_pos } => {
+                    let win_pos_within_output = win_pos;
+                    window
+                        .surface_under(
+                            pos_within_output - win_pos_within_output,
+                            WindowSurfaceType::ALL,
+                        )
+                        .map(|(s, pos_within_window)| {
+                            (s, pos_within_window.to_f64() + win_pos_within_output)
+                        })
+                }
+                // rice: a window drawn scaled (zoomed canvas).
+                HitType::ScaledInput { win_pos, zoom } => {
+                    scaled_surface_under(window, pos_within_output, win_pos, zoom)
+                }
+                HitType::Activate { .. } | HitType::TitleBar => None,
             };
             (surface_and_pos, (Some((window.clone(), hit)), None))
         };
@@ -4205,6 +4252,29 @@ impl Niri {
                     // to look more similar to the branch below.
                     return Some((tablet_pos, win_pos));
                 }
+            }
+        }
+        // rice: a window drawn scaled (zoomed canvas). Callers draw the cursor at
+        // `pointer - win_pos` within the unscaled window, so report a window position that puts
+        // the cursor at its unscaled position.
+        else if let Some((w, HitType::ScaledInput { win_pos, zoom })) =
+            &self.pointer_contents.window
+        {
+            let pointer = self.seat.get_pointer().unwrap();
+            let focused = pointer
+                .current_focus()
+                .map(|focused| self.find_root_shell_surface(&focused))
+                .is_some_and(|focused| mapped.is_wl_surface(&focused));
+            let output_loc = self
+                .pointer_contents
+                .output
+                .as_ref()
+                .and_then(|output| self.global_space.output_geometry(output));
+            if let (true, true, Some(output_geo)) = (w == &mapped.window, focused, output_loc) {
+                let pos = pointer.current_location();
+                let pos_within_output = pos - output_geo.loc.to_f64();
+                let local = (pos_within_output - *win_pos).downscale(*zoom);
+                return Some((pos, pos_within_output - local));
             }
         }
         // Regular cursor.
@@ -7104,6 +7174,11 @@ impl Niri {
         let Some((surface, surface_loc)) = &self.pointer_contents.surface else {
             return;
         };
+
+        // rice: pointer constraints are not activated on windows drawn scaled (zoomed canvas).
+        if self.pointer_contents.scaled_input_zoom().is_some() {
+            return;
+        }
 
         let pointer = self.seat.get_pointer().unwrap();
         if Some(surface) != pointer.current_focus().as_ref() {

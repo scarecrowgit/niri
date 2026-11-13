@@ -8,10 +8,14 @@
 
 use niri_config::Action;
 use smithay::desktop::Window;
-use smithay::utils::Point;
+use smithay::output::Output;
+use smithay::utils::{Logical, Point};
+use smithay::wayland::shell::wlr_layer::Layer;
 
+use crate::input::modifiers_from_state;
 use crate::layout::canvas::CanvasPanDirection;
-use crate::niri::State;
+use crate::layout::workspace::WorkspaceId;
+use crate::niri::{Niri, State};
 use crate::window::mapped::MappedId;
 
 /// What to do after an action ran.
@@ -120,6 +124,73 @@ impl CanvasActionHook {
 }
 
 impl State {
+    /// Starts a canvas pinch zoom if a touchpad pinch begins over a canvas workspace: with 3 or
+    /// more fingers, with the Mod key held, or over the empty plane. Two-finger pinches over
+    /// windows go to the window as usual.
+    pub fn canvas_pinch_begin(&mut self, fingers: u32) -> bool {
+        if self.niri.is_locked()
+            || self.niri.layout.is_overview_open()
+            || self.niri.screenshot_ui.is_open()
+            || self.niri.window_mru_ui.is_open()
+            || self.niri.pointer_over_top_layer()
+        {
+            return false;
+        }
+        let Some((_, ws_id, _)) = self.niri.canvas_under_cursor() else {
+            return false;
+        };
+
+        let mod_key = self.backend.mod_key(&self.niri.config.borrow());
+        let mods = self.niri.seat.get_keyboard().unwrap().modifier_state();
+        let mod_down = modifiers_from_state(mods).contains(mod_key.to_modifiers());
+        let over_window = self.niri.pointer_contents.window.is_some();
+        if !(fingers >= 3 || mod_down || !over_window) {
+            return false;
+        }
+
+        self.niri.layout.canvas_zoom_gesture_begin(ws_id)
+    }
+
+    /// Updates a canvas pinch zoom; `scale` is relative to the start of the pinch. Returns
+    /// whether a canvas pinch is ongoing.
+    pub fn canvas_pinch_update(&mut self, scale: f64) -> bool {
+        let sensitivity = self
+            .niri
+            .config
+            .borrow()
+            .input
+            .touchpad
+            .pinch_sensitivity
+            .map_or(1., |x| x.0);
+        let anchor = self.niri.canvas_under_cursor().map(|(_, _, anchor)| anchor);
+        let res = self
+            .niri
+            .layout
+            .canvas_zoom_gesture_update(scale.powf(sensitivity), anchor);
+        match res {
+            Some(output) => {
+                if let Some(output) = output {
+                    self.niri.queue_redraw(&output);
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Zooms by one step: with `at_cursor`, the canvas workspace under the cursor around the
+    /// cursor (the plane point under it stays put); otherwise (or when the cursor is not over a
+    /// canvas) the focused workspace around its working area centre.
+    fn canvas_zoom_step(&mut self, zoom_in: bool, at_cursor: bool) {
+        let under = at_cursor.then(|| self.niri.canvas_under_cursor()).flatten();
+        let layout = &mut self.niri.layout;
+        match under {
+            Some((_, ws_id, anchor)) => layout.canvas_zoom_step_at(ws_id, zoom_in, Some(anchor)),
+            None if zoom_in => layout.canvas_zoom_in(None),
+            None => layout.canvas_zoom_out(None),
+        }
+    }
+
     /// Executes a canvas action. Returns `false` for non-canvas actions.
     pub fn do_canvas_action(&mut self, action: Action) -> bool {
         let find = |state: &State, id: u64| state.niri.find_window_by_id(MappedId::specific(id));
@@ -132,8 +203,8 @@ impl State {
             Action::CanvasPanUp => self.niri.layout.canvas_pan(CanvasPanDirection::Up),
             Action::CanvasPanDown => self.niri.layout.canvas_pan(CanvasPanDirection::Down),
             Action::CanvasPanTo(x, y) => self.niri.layout.canvas_pan_to(Point::from((x.0, y.0))),
-            Action::CanvasZoomIn => self.niri.layout.canvas_zoom_in(None),
-            Action::CanvasZoomOut => self.niri.layout.canvas_zoom_out(None),
+            Action::CanvasZoomIn(at_cursor) => self.canvas_zoom_step(true, at_cursor),
+            Action::CanvasZoomOut(at_cursor) => self.canvas_zoom_step(false, at_cursor),
             Action::CanvasSetZoom(zoom) => self.niri.layout.canvas_set_zoom(zoom.0, None),
             Action::CanvasFit => self.niri.layout.canvas_fit(),
             Action::CanvasHome => self.niri.layout.canvas_home(),
@@ -155,5 +226,27 @@ impl State {
         // FIXME: granular
         self.niri.queue_redraw_all();
         true
+    }
+}
+
+impl Niri {
+    /// Canvas workspace under the cursor, with the cursor position in its view coordinates (the
+    /// anchor for zooming at the cursor).
+    pub fn canvas_under_cursor(&self) -> Option<(Output, WorkspaceId, Point<f64, Logical>)> {
+        let pos = self.seat.get_pointer()?.current_location();
+        let (output, pos_within_output) = self.output_under(pos)?;
+        let (ws_id, anchor) = self
+            .layout
+            .canvas_workspace_under(output, pos_within_output)?;
+        Some((output.clone(), ws_id, anchor))
+    }
+
+    /// Whether the pointer is over a top or overlay layer surface (bars, launchers), as opposed
+    /// to the workspace or a background/bottom layer surface (wallpaper) behind it.
+    pub fn pointer_over_top_layer(&self) -> bool {
+        self.pointer_contents
+            .layer
+            .as_ref()
+            .is_some_and(|layer| matches!(layer.layer(), Layer::Top | Layer::Overlay))
     }
 }

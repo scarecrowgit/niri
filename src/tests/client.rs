@@ -34,6 +34,7 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_keyboard::{self, WlKeyboard};
 use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
@@ -102,12 +103,30 @@ pub struct LayerSurface {
 #[derive(Debug, Default)]
 pub struct Seat {
     pub keyboard: Option<Keyboard>,
+    pub pointer: Option<Pointer>,
 }
 
 #[derive(Debug)]
 pub struct Surface {
     pub keyboard_events_received: Vec<KeyboardEvent>,
     pub keyboard_events_looked_at: usize,
+    pub pointer_events_received: Vec<PointerEvent>,
+}
+
+#[derive(Debug)]
+pub struct Pointer {
+    pub proxy: WlPointer,
+    pub surface: Option<WlSurface>,
+}
+
+/// wl_pointer events received by a surface (frames are not recorded).
+#[derive(Debug, Clone, PartialEq)]
+pub enum PointerEvent {
+    Enter { x: f64, y: f64 },
+    Leave,
+    Motion { x: f64, y: f64 },
+    Button { button: u32, pressed: bool },
+    Axis { axis: wl_pointer::Axis, value: f64 },
 }
 
 #[derive(Debug)]
@@ -339,6 +358,7 @@ impl State {
             Surface {
                 keyboard_events_received: Vec::new(),
                 keyboard_events_looked_at: 0,
+                pointer_events_received: Vec::new(),
             },
         );
         surface
@@ -430,6 +450,12 @@ impl State {
     pub fn format_recent_keyboard_events(&mut self, surface: &WlSurface) -> String {
         let surface = self.surfaces.get_mut(surface).unwrap();
         surface.format_recent_keyboard_events()
+    }
+
+    /// Takes the pointer events the surface received so far.
+    pub fn take_pointer_events(&mut self, surface: &WlSurface) -> Vec<PointerEvent> {
+        let surface = self.surfaces.get_mut(surface).unwrap();
+        std::mem::take(&mut surface.pointer_events_received)
     }
 
     pub fn inhibit_shortcuts(&self, surface: &WlSurface) -> ZwpKeyboardShortcutsInhibitorV1 {
@@ -749,6 +775,18 @@ impl Dispatch<WlSeat, ()> for State {
                         keyboard.proxy.release();
                     }
                 }
+
+                if capabilities.contains(wl_seat::Capability::Pointer) {
+                    if data.pointer.is_none() {
+                        let pointer = Pointer {
+                            proxy: seat.get_pointer(qh, seat.clone()),
+                            surface: None,
+                        };
+                        data.pointer = Some(pointer);
+                    }
+                } else if let Some(pointer) = data.pointer.take() {
+                    pointer.proxy.release();
+                }
             }
             wl_seat::Event::Name { .. } => (),
             _ => unreachable!(),
@@ -823,6 +861,70 @@ impl Dispatch<WlKeyboard, WlSeat> for State {
             }
             wl_keyboard::Event::RepeatInfo { .. } => (),
             _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<WlPointer, WlSeat> for State {
+    fn event(
+        state: &mut Self,
+        _pointer: &WlPointer,
+        event: <WlPointer as wayland_client::Proxy>::Event,
+        seat: &WlSeat,
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let seat = state.seats.get_mut(seat).unwrap();
+        let pointer = seat.pointer.as_mut().unwrap();
+
+        let (surface, event) = match event {
+            wl_pointer::Event::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                pointer.surface = Some(surface.clone());
+                let event = PointerEvent::Enter {
+                    x: surface_x,
+                    y: surface_y,
+                };
+                (Some(surface), event)
+            }
+            wl_pointer::Event::Leave { .. } => (pointer.surface.take(), PointerEvent::Leave),
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => {
+                let event = PointerEvent::Motion {
+                    x: surface_x,
+                    y: surface_y,
+                };
+                (pointer.surface.clone(), event)
+            }
+            wl_pointer::Event::Button {
+                button,
+                state: button_state,
+                ..
+            } => {
+                let pressed =
+                    button_state.into_result().unwrap() == wl_pointer::ButtonState::Pressed;
+                (
+                    pointer.surface.clone(),
+                    PointerEvent::Button { button, pressed },
+                )
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => {
+                let axis = axis.into_result().unwrap();
+                (pointer.surface.clone(), PointerEvent::Axis { axis, value })
+            }
+            _ => return,
+        };
+
+        // Cursor surfaces and surfaces of other clients are not tracked.
+        if let Some(surface) = surface.and_then(|s| state.surfaces.get_mut(&s)) {
+            surface.pointer_events_received.push(event);
         }
     }
 }

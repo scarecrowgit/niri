@@ -604,22 +604,31 @@ fn interactive_move_drop_on_zoomed_canvas() {
                 px: start.x + 300.,
                 py: start.y + 200.,
             },
+            // Let the move animation from the original position finish.
+            Op::CompleteAnimations,
         ],
     );
 
-    // Where the dragged tile is drawn right before the drop (view coordinates).
+    // While over the canvas, the dragged tile is drawn at the canvas zoom.
     let drop_loc = match &layout.interactive_move {
-        Some(InteractiveMoveState::Moving(move_)) => move_.tile_render_location(1.),
+        Some(InteractiveMoveState::Moving(move_)) => {
+            assert_eq!(layout.interactive_move_canvas_zoom(move_), zoom);
+            move_.tile_render_location(zoom)
+        }
         other => panic!("expected an ongoing move, got {other:?}"),
     };
 
     check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 2 }]);
     assert_eq!(ws(&layout).mode(), WorkspaceMode::Canvas);
     assert!(ws(&layout).is_floating(&2));
-    // The drop position was converted view -> plane: the window lands where it was drawn.
-    let landed = view_rect(&layout, 2).loc;
-    assert_abs_diff_eq!(landed.x, drop_loc.x, epsilon = 1.);
-    assert_abs_diff_eq!(landed.y, drop_loc.y, epsilon = 1.);
+    // The drop position was converted view -> plane: the window lands where it was drawn...
+    let landed = view_rect(&layout, 2);
+    assert_abs_diff_eq!(landed.loc.x, drop_loc.x, epsilon = 1.);
+    assert_abs_diff_eq!(landed.loc.y, drop_loc.y, epsilon = 1.);
+    // ...at the same size, so the point grabbed (the centre) is still under the pointer.
+    let center = rect_center(landed);
+    assert_abs_diff_eq!(center.x, start.x + 300., epsilon = 1.);
+    assert_abs_diff_eq!(center.y, start.y + 200., epsilon = 1.);
 }
 
 #[test]
@@ -660,18 +669,37 @@ fn frame_width_compensated_when_zoom_settles() {
 }
 
 #[test]
-fn hit_testing_under_zoom_is_activate_only() {
+fn hit_testing_under_zoom() {
     let mut layout = check_ops([
         Op::AddOutput(1),
         window(1),
         Op::ToggleWorkspaceMode,
         Op::CompleteAnimations,
     ]);
-    let center = rect_center(view_rect(&layout, 1));
+    let rect = view_rect(&layout, 1);
+    let center = rect_center(rect);
     let (win, hit) = ws(&layout).window_under(center).unwrap();
     assert_eq!(win.0.id, 1);
+    // Test windows have no input region.
     assert!(matches!(hit, HitType::Activate { .. }));
-    assert!(ws(&layout).resize_edges_under(center).is_none());
+
+    // Resize edges are found through the zoom: thirds of the drawn tile.
+    let edges = |p: Point<f64, Logical>| ws(&layout).resize_edges_under(p);
+    assert_eq!(edges(center), Some(ResizeEdge::empty()));
+    let near_top_left = rect.loc + Point::from((2., 2.));
+    assert_eq!(
+        edges(near_top_left),
+        Some(ResizeEdge::TOP | ResizeEdge::LEFT)
+    );
+    let near_bottom_right = rect.loc + rect.size.to_point() - Point::from((2., 2.));
+    assert_eq!(
+        edges(near_bottom_right),
+        Some(ResizeEdge::BOTTOM | ResizeEdge::RIGHT)
+    );
+    // Just outside the drawn tile there is nothing, although the unscaled tile extends there.
+    let outside = rect.loc + rect.size.to_point() + Point::from((2., 2.));
+    assert_eq!(edges(outside), None);
+    assert!(ws(&layout).window_under(outside).is_none());
 
     // At 100% hits are passed through unchanged (test windows have no input region, so compare
     // with the raw tile hit).
@@ -788,4 +816,290 @@ fn focused_maximized_window_covers_canvas() {
         ],
     );
     assert!(ws(&layout).is_floating(&2));
+}
+
+#[test]
+fn scaled_input_hit_conversion() {
+    let hit = HitType::Input {
+        win_pos: Point::from((100., 50.)),
+    };
+    assert_eq!(hit.scaled(1.), hit);
+    let scaled = hit.scaled(0.5);
+    assert_eq!(
+        scaled,
+        HitType::ScaledInput {
+            win_pos: Point::from((50., 25.)),
+            zoom: 0.5
+        }
+    );
+    // Offsetting moves the drawn position (e.g. by the workspace origin).
+    assert_eq!(
+        scaled.offset_win_pos(Point::from((10., 20.))),
+        HitType::ScaledInput {
+            win_pos: Point::from((60., 45.)),
+            zoom: 0.5
+        }
+    );
+    assert!(matches!(scaled.to_activate(), HitType::Activate { .. }));
+    let activate = HitType::Activate {
+        is_tab_indicator: false,
+    };
+    assert_eq!(activate.scaled(0.5), activate);
+}
+
+#[test]
+fn interactive_resize_under_zoom_divides_deltas() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+        Op::CanvasSetZoom(0.5),
+        Op::CompleteAnimations,
+    ]);
+    let before = plane_rect(&layout, 1);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveResizeBegin {
+                window: 1,
+                edges: ResizeEdge::RIGHT | ResizeEdge::BOTTOM,
+            },
+            Op::InteractiveResizeUpdate {
+                window: 1,
+                dx: 50.,
+                dy: 30.,
+            },
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    // The window was asked to grow by the view delta divided by the zoom.
+    let win = ws(&layout).windows().find(|w| w.0.id == 1).unwrap();
+    let requested = win.requested_size().unwrap();
+    assert_eq!(requested.w, (before.size.w + 100.) as i32);
+    assert_eq!(requested.h, (before.size.h + 60.) as i32);
+    check_ops_on_layout(&mut layout, [Op::InteractiveResizeEnd { window: 1 }]);
+}
+
+#[test]
+fn pan_gesture_follows_pointer_and_glides() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let zoom = transform(&layout).zoom;
+    let grabbed = Point::from((700.25, 400.5));
+    let plane_under = transform(&layout).view_to_plane(grabbed);
+
+    let ms = Duration::from_millis;
+    let ws_id = ws(&layout).id();
+    assert!(layout.canvas_pan_gesture_begin(ws_id, false));
+    // Drag the content right/down by (90.5, 33.25) view pixels in a few steps: the view moves the
+    // other way.
+    for (i, (dx, dy)) in [(30., 10.), (30.5, 13.25), (30., 10.)]
+        .into_iter()
+        .enumerate()
+    {
+        let res = layout.canvas_pan_gesture_update(
+            Point::from((-dx, -dy)),
+            ms(10 * (i as u64 + 1)),
+            false,
+        );
+        assert!(res.is_some());
+    }
+    // A touchpad update does not touch a pointer gesture.
+    assert!(layout
+        .canvas_pan_gesture_update(Point::from((5., 5.)), ms(35), true)
+        .is_none());
+    layout.verify_invariants();
+
+    // The plane point that was under the pointer moved with it, exactly.
+    let moved = grabbed + Point::from((90.5, 33.25));
+    let now_under = transform(&layout).view_to_plane(moved);
+    assert_abs_diff_eq!(now_under.x, plane_under.x, epsilon = 1e-9);
+    assert_abs_diff_eq!(now_under.y, plane_under.y, epsilon = 1e-9);
+    assert_eq!(transform(&layout).zoom, zoom);
+
+    // Releasing right away glides on in the drag direction.
+    let before = transform(&layout);
+    assert!(layout
+        .canvas_pan_gesture_end(Some(ms(31)), Some(false))
+        .is_some());
+    let view = ws(&layout).canvas_view().unwrap();
+    assert!(view.is_animating());
+    assert!(view.target().offset.x < before.offset.x);
+    assert!(view.target().offset.y < before.offset.y);
+    assert_eq!(view.target().zoom, zoom);
+    layout.verify_invariants();
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+
+    // Holding still before releasing does not glide.
+    assert!(layout.canvas_pan_gesture_begin(ws_id, false));
+    layout.canvas_pan_gesture_update(Point::from((-40., 0.)), ms(1000), false);
+    let before = transform(&layout);
+    layout.canvas_pan_gesture_end(Some(ms(1500)), Some(false));
+    assert!(!ws(&layout).canvas_view().unwrap().is_animating());
+    assert_eq!(transform(&layout), before);
+
+    // Nothing happens on strip workspaces.
+    check_ops_on_layout(&mut layout, [Op::ToggleWorkspaceMode]);
+    assert!(!layout.canvas_pan_gesture_begin(ws_id, false));
+    assert!(layout
+        .canvas_pan_gesture_update(Point::from((1., 1.)), ms(2000), false)
+        .is_none());
+}
+
+#[test]
+fn touchpad_pan_gesture_is_normalized() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let before = transform(&layout);
+    let ws_id = ws(&layout).id();
+    assert!(layout.canvas_pan_gesture_begin(ws_id, true));
+    layout.canvas_pan_gesture_update(Point::from((120., -60.)), Duration::from_millis(5), true);
+    let factor = working_area(&layout).size.w / 1200.;
+    let after = transform(&layout);
+    assert_abs_diff_eq!(
+        after.offset.x - before.offset.x,
+        120. * factor / before.zoom,
+        epsilon = 1e-9
+    );
+    assert_abs_diff_eq!(
+        after.offset.y - before.offset.y,
+        -60. * factor / before.zoom,
+        epsilon = 1e-9
+    );
+    // Cancelled: no glide.
+    layout.canvas_pan_gesture_end(None, Some(true));
+    assert!(!ws(&layout).canvas_view().unwrap().is_animating());
+}
+
+#[test]
+fn zoom_gesture_keeps_anchor_and_clamps() {
+    let mut options = Options::default();
+    options.layout.focus_ring.width = 1.;
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            window(1),
+            Op::ToggleWorkspaceMode,
+            Op::CompleteAnimations,
+        ],
+    );
+    let start = transform(&layout);
+    let anchor = Point::from((300., 200.));
+    let plane_under = start.view_to_plane(anchor);
+    let frame_width = ws(&layout).floating().options().layout.focus_ring.width;
+
+    let ws_id = ws(&layout).id();
+    assert!(layout.canvas_zoom_gesture_begin(ws_id));
+    for scale in [1.1, 1.3, 0.7, 0.9] {
+        assert!(layout
+            .canvas_zoom_gesture_update(scale, Some(anchor))
+            .is_some());
+        let t = transform(&layout);
+        assert_abs_diff_eq!(t.zoom, start.zoom * scale, epsilon = 1e-9);
+        let under = t.view_to_plane(anchor);
+        assert_abs_diff_eq!(under.x, plane_under.x, epsilon = 1e-6);
+        assert_abs_diff_eq!(under.y, plane_under.y, epsilon = 1e-6);
+        // Frame widths are not recomputed while pinching.
+        assert_eq!(
+            ws(&layout).floating().options().layout.focus_ring.width,
+            frame_width
+        );
+        layout.verify_invariants();
+    }
+
+    // Clamped to the zoom-steps range.
+    layout.canvas_zoom_gesture_update(100., Some(anchor));
+    assert_eq!(transform(&layout).zoom, 1.);
+    layout.canvas_zoom_gesture_update(0.01, Some(anchor));
+    assert_eq!(transform(&layout).zoom, 0.4);
+    assert!(layout.canvas_zoom_gesture_end().is_some());
+    assert!(layout.canvas_zoom_gesture_end().is_none());
+    // Settled: frame widths compensated for 0.4.
+    assert_eq!(ws(&layout).floating().options().layout.focus_ring.width, 3.);
+    layout.verify_invariants();
+}
+
+#[test]
+fn zoom_step_at_anchor() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let anchor = Point::from((123., 456.));
+    let plane_under = transform(&layout).view_to_plane(anchor);
+    let ws_id = ws(&layout).id();
+    layout.canvas_zoom_step_at(ws_id, true, Some(anchor));
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    let t = transform(&layout);
+    assert_eq!(t.zoom, 0.75);
+    let under = t.view_to_plane(anchor);
+    assert_abs_diff_eq!(under.x, plane_under.x, epsilon = 1e-6);
+    assert_abs_diff_eq!(under.y, plane_under.y, epsilon = 1e-6);
+}
+
+#[test]
+fn warp_target_uses_the_target_view() {
+    let layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        window(2),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+        Op::CanvasPan(CanvasPanDirection::Left),
+    ]);
+    // The view is animating; the warp rectangle is where the window will be.
+    assert!(ws(&layout).canvas_view().unwrap().is_animating());
+    let rect = ws(&layout).active_window_visual_rectangle();
+    assert!(rect.is_some());
+    let target = ws(&layout).canvas_target_transform().unwrap();
+    let active = ws(&layout).active_window().unwrap().0.id;
+    let expected = target.plane_rect_to_view(plane_rect(&layout, active));
+    let expected = working_area(&layout).intersection(expected);
+    assert_eq!(rect, expected);
+}
+
+#[test]
+fn title_strip_hit_through_zoom() {
+    let mut options = Options::default();
+    options.layout.title_bar = niri_config::TitleBar {
+        off: false,
+        ..Default::default()
+    };
+    let layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            window(1),
+            Op::Communicate(1),
+            Op::ToggleWorkspaceMode,
+            Op::Communicate(1),
+            Op::CompleteAnimations,
+            Op::CanvasSetZoom(0.5),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(transform(&layout).zoom, 0.5);
+    let rect = view_rect(&layout, 1);
+    // 10 × 10 plane pixels into the tile: on the title strip, drawn at half size.
+    let on_strip = rect.loc + Point::from((5., 5.));
+    let (win, hit) = ws(&layout).window_under(on_strip).unwrap();
+    assert_eq!(win.0.id, 1);
+    assert_eq!(hit, HitType::TitleBar);
+    // The same unscaled offset (10, 10) * 1 would be at 20 plane pixels: still the strip, but
+    // just below the drawn tile there is nothing.
+    let below = rect.loc + Point::from((5., rect.size.h + 1.));
+    assert!(ws(&layout).window_under(below).is_none());
 }

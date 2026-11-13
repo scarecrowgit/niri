@@ -1065,9 +1065,21 @@ pub enum Action {
         y: f64,
     },
     /// Zoom the canvas view in to the next zoom step.
-    CanvasZoomIn {},
+    CanvasZoomIn {
+        /// Keep the plane point under the cursor fixed (canvas under the cursor), instead of
+        /// the centre of the focused canvas.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)] // rice
+        at_cursor: bool,
+    },
     /// Zoom the canvas view out to the previous zoom step.
-    CanvasZoomOut {},
+    CanvasZoomOut {
+        /// Keep the plane point under the cursor fixed (canvas under the cursor), instead of
+        /// the centre of the focused canvas.
+        #[cfg_attr(feature = "clap", arg(long))]
+        #[serde(default)] // rice
+        at_cursor: bool,
+    },
     /// Set the canvas zoom (clamped to the configured zoom-steps range).
     CanvasSetZoom {
         /// Zoom factor, e.g. 0.62 or 1.0.

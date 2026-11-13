@@ -25,12 +25,18 @@
 //! value with the pan progress, while the zoom follows its own spring, and the offset is derived
 //! from both. With a fixed plane point under the focus this reduces to zooming around an anchor.
 
+use std::time::Duration;
+
 use niri_config::{Canvas as CanvasConfig, WorkspaceMode};
+use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use super::monitor::InsertWorkspace;
 use super::scrolling::StripArrangement;
-use super::{Layout, LayoutElement};
+use super::workspace::{Workspace, WorkspaceId};
+use super::{InteractiveMoveData, Layout, LayoutElement, MonitorSet};
 use crate::animation::{Animation, Clock};
+use crate::input::swipe_tracker::SwipeTracker;
 
 /// Padding around the windows for "fit", in logical view pixels.
 pub const CANVAS_FIT_PADDING: f64 = 48.;
@@ -216,6 +222,20 @@ impl CanvasView {
         pan_config: niri_config::Animation,
         zoom_config: niri_config::Animation,
     ) {
+        self.animate_to_with_velocity(clock, target, focus, 0., pan_config, zoom_config);
+    }
+
+    /// Like [`Self::animate_to`], with an initial pan velocity in pan progress per second (the
+    /// pan progress goes from 0 to 1).
+    fn animate_to_with_velocity(
+        &mut self,
+        clock: &Clock,
+        target: CanvasTransform,
+        focus: Point<f64, Logical>,
+        pan_velocity: f64,
+        pan_config: niri_config::Animation,
+        zoom_config: niri_config::Animation,
+    ) {
         let current = self.current;
         if current.approx_eq(&target) {
             self.jump_to(target);
@@ -230,7 +250,7 @@ impl CanvasView {
         let zoom_changes = (current.zoom - target.zoom).abs() > ZOOM_EPSILON;
 
         let pan = (pan_moves && !pan_config.off)
-            .then(|| Animation::new(clock.clone(), 0., 1., 0., pan_config));
+            .then(|| Animation::new(clock.clone(), 0., 1., pan_velocity, pan_config));
         let zoom = (zoom_changes && !zoom_config.off)
             .then(|| Animation::new(clock.clone(), current.zoom, target.zoom, 0., zoom_config));
 
@@ -249,6 +269,39 @@ impl CanvasView {
         });
         // Keep current consistent with a possibly partial animation (e.g. pan off, zoom on).
         self.advance();
+    }
+
+    /// Continues a released pan gesture: glides by `plane_delta` starting at `plane_speed`
+    /// plane pixels per second along it. Does nothing while animating or with animations off.
+    pub fn glide(
+        &mut self,
+        clock: &Clock,
+        plane_delta: Point<f64, Logical>,
+        plane_speed: f64,
+        focus: Point<f64, Logical>,
+        pan_config: niri_config::Animation,
+    ) {
+        let dist = plane_delta.x.hypot(plane_delta.y);
+        if self.anim.is_some() || pan_config.off || dist < 1e-6 || !plane_speed.is_finite() {
+            return;
+        }
+        let target = CanvasTransform::new(self.current.offset + plane_delta, self.current.zoom);
+        let velocity = plane_speed / dist;
+        self.animate_to_with_velocity(clock, target, focus, velocity, pan_config, pan_config);
+    }
+
+    /// Moves the view by `delta` plane pixels right away, keeping any ongoing animation (the
+    /// plane points it moves between shift along with it).
+    pub fn pan_by_plane(&mut self, delta: Point<f64, Logical>) {
+        if !(delta.x.is_finite() && delta.y.is_finite()) {
+            return;
+        }
+        self.current.offset += delta;
+        self.target.offset += delta;
+        if let Some(anim) = &mut self.anim {
+            anim.from_plane += delta;
+            anim.to_plane += delta;
+        }
     }
 
     /// Advances the animation to the clock's current time. Returns whether anything changed.
@@ -402,9 +455,27 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) frame_zoom: f64,
     /// Plane position of the last window placed by the new-window cascade.
     pub(super) cascade: Option<Point<f64, Logical>>,
+    /// Ongoing direct-manipulation pan (mouse drag or touchpad swipe).
+    pub(super) pan_gesture: Option<CanvasPanGesture>,
+    /// Zoom at the start of an ongoing pinch zoom gesture.
+    pub(super) zoom_gesture: Option<f64>,
     /// rice: plane grid and named regions (runtime regions and render state).
     pub(super) decor: super::canvas_grid::CanvasDecorations,
 }
+
+/// State of a direct-manipulation pan of a canvas view.
+#[derive(Debug)]
+pub struct CanvasPanGesture {
+    pub(super) tracker_x: SwipeTracker,
+    pub(super) tracker_y: SwipeTracker,
+    pub(super) is_touchpad: bool,
+    /// Factor from gesture units to view pixels.
+    pub(super) norm_factor: f64,
+}
+
+/// Touchpad swipe distance that pans the canvas by one working area width, like the scrolling
+/// view-offset gesture.
+pub const CANVAS_TOUCHPAD_GESTURE_MOVEMENT: f64 = 1200.;
 
 impl<Id> Default for WorkspaceCanvas<Id> {
     fn default() -> Self {
@@ -415,6 +486,8 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             memory: None,
             frame_zoom: 1.,
             cascade: None,
+            pan_gesture: None,
+            zoom_gesture: None,
             decor: Default::default(), // rice
         }
     }
@@ -575,6 +648,148 @@ impl<W: LayoutElement> Layout<W> {
         self.workspaces()
             .find(|(_, _, ws)| ws.has_window(window))
             .is_some_and(|(_, _, ws)| ws.is_window_pinned(window))
+    }
+
+    // -------------------------------------------------------------------------------------------
+    // Pointer and gesture input.
+    // -------------------------------------------------------------------------------------------
+
+    /// Canvas workspace under a point of an output, with the point in its view coordinates
+    /// (the anchor for zoom-at-cursor).
+    pub fn canvas_workspace_under(
+        &self,
+        output: &Output,
+        pos_within_output: Point<f64, Logical>,
+    ) -> Option<(WorkspaceId, Point<f64, Logical>)> {
+        let mon = self.monitor_for_output(output)?;
+        let (ws, geo) = mon.workspace_under(pos_within_output)?;
+        if !ws.is_canvas() {
+            return None;
+        }
+        let anchor = (pos_within_output - geo.loc).downscale(mon.overview_zoom());
+        Some((ws.id(), anchor))
+    }
+
+    /// Zooms a canvas workspace in or out by one step around `anchor` (its view coordinates).
+    pub fn canvas_zoom_step_at(
+        &mut self,
+        ws_id: WorkspaceId,
+        zoom_in: bool,
+        anchor: Option<Point<f64, Logical>>,
+    ) {
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.id() == ws_id) {
+            ws.canvas_zoom_step(zoom_in, anchor);
+        }
+    }
+
+    /// Starts panning a canvas workspace by direct manipulation. Cancels other canvas pan
+    /// gestures.
+    pub fn canvas_pan_gesture_begin(&mut self, ws_id: WorkspaceId, is_touchpad: bool) -> bool {
+        let mut started = false;
+        for ws in self.workspaces_mut() {
+            if ws.id() == ws_id {
+                started = ws.canvas_pan_gesture_begin(is_touchpad);
+            } else {
+                ws.canvas_pan_gesture_end(None);
+            }
+        }
+        started
+    }
+
+    /// Pans the canvas with the ongoing pan gesture by `delta` (view pixels for the pointer,
+    /// touchpad units for the touchpad; positive moves the view towards positive plane
+    /// coordinates).
+    ///
+    /// Returns `None` if there is no such gesture, and the output to redraw otherwise.
+    pub fn canvas_pan_gesture_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        timestamp: Duration,
+        is_touchpad: bool,
+    ) -> Option<Option<Output>> {
+        let (ws, output) =
+            self.canvas_gesture_ws_mut(|ws| ws.has_canvas_pan_gesture(Some(is_touchpad)))?;
+        ws.canvas_pan_gesture_update(delta, timestamp, is_touchpad)
+            .then_some(output)
+    }
+
+    /// Ends the ongoing pan gesture; with a `timestamp` (release time) the view glides on with
+    /// the release velocity, without one the gesture is cancelled in place.
+    pub fn canvas_pan_gesture_end(
+        &mut self,
+        timestamp: Option<Duration>,
+        is_touchpad: Option<bool>,
+    ) -> Option<Option<Output>> {
+        let (ws, output) =
+            self.canvas_gesture_ws_mut(|ws| ws.has_canvas_pan_gesture(is_touchpad))?;
+        ws.canvas_pan_gesture_end(timestamp).then_some(output)
+    }
+
+    /// Starts a pinch zoom of a canvas workspace.
+    pub fn canvas_zoom_gesture_begin(&mut self, ws_id: WorkspaceId) -> bool {
+        let mut started = false;
+        for ws in self.workspaces_mut() {
+            if ws.id() == ws_id {
+                started = ws.canvas_zoom_gesture_begin();
+            } else {
+                ws.canvas_zoom_gesture_end();
+            }
+        }
+        started
+    }
+
+    /// Updates the ongoing pinch zoom: `scale` is relative to the start of the gesture, `anchor`
+    /// is the view point to zoom around (pointer position; working area centre if `None`).
+    pub fn canvas_zoom_gesture_update(
+        &mut self,
+        scale: f64,
+        anchor: Option<Point<f64, Logical>>,
+    ) -> Option<Option<Output>> {
+        let (ws, output) = self.canvas_gesture_ws_mut(|ws| ws.has_canvas_zoom_gesture())?;
+        ws.canvas_zoom_gesture_update(scale, anchor)
+            .then_some(output)
+    }
+
+    /// Ends the ongoing pinch zoom.
+    pub fn canvas_zoom_gesture_end(&mut self) -> Option<Option<Output>> {
+        let (ws, output) = self.canvas_gesture_ws_mut(|ws| ws.has_canvas_zoom_gesture())?;
+        ws.canvas_zoom_gesture_end().then_some(output)
+    }
+
+    /// Workspace (and its output) matching `pred`.
+    fn canvas_gesture_ws_mut(
+        &mut self,
+        pred: impl Fn(&Workspace<W>) -> bool,
+    ) -> Option<(&mut Workspace<W>, Option<Output>)> {
+        match &mut self.monitor_set {
+            MonitorSet::Normal { monitors, .. } => monitors.iter_mut().find_map(|mon| {
+                let output = mon.output.clone();
+                mon.workspaces
+                    .iter_mut()
+                    .find(|ws| pred(ws))
+                    .map(|ws| (ws, Some(output)))
+            }),
+            MonitorSet::NoOutputs { workspaces, .. } => workspaces
+                .iter_mut()
+                .find(|ws| pred(ws))
+                .map(|ws| (ws, None)),
+        }
+    }
+
+    /// Canvas zoom of the workspace that an interactively moved tile is over (1 elsewhere): the
+    /// tile is drawn at that zoom so that it lands exactly where it is dropped.
+    pub(super) fn interactive_move_canvas_zoom(&self, move_: &InteractiveMoveData<W>) -> f64 {
+        let Some(mon) = self.monitor_for_output(&move_.output) else {
+            return 1.;
+        };
+        let (insert_ws, _) = mon.insert_position(move_.pointer_pos_within_output);
+        let InsertWorkspace::Existing(id) = insert_ws else {
+            return 1.;
+        };
+        mon.workspaces
+            .iter()
+            .find(|ws| ws.id() == id)
+            .map_or(1., |ws| ws.canvas_zoom())
     }
 }
 

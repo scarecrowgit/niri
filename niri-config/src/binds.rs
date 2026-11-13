@@ -567,8 +567,11 @@ pub enum Action {
         #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
         #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
     ),
-    CanvasZoomIn,
-    CanvasZoomOut,
+    CanvasZoomIn(#[knuffel(property(name = "at-cursor"), default)] bool),
+    CanvasZoomOut(#[knuffel(property(name = "at-cursor"), default)] bool),
+    /// rice: runs the first child action if the focused workspace is a canvas, the second one
+    /// (if any) otherwise, so that one key can do different things in the two modes.
+    IfCanvas(#[knuffel(children)] Vec<Action>),
     CanvasSetZoom(#[knuffel(argument)] FloatOrInt<0, 4>),
     CanvasFit,
     CanvasHome,
@@ -938,8 +941,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::CanvasPanTo { x, y } => {
                 Self::CanvasPanTo(FloatOrInt(x), FloatOrInt(y))
             }
-            niri_ipc::Action::CanvasZoomIn {} => Self::CanvasZoomIn,
-            niri_ipc::Action::CanvasZoomOut {} => Self::CanvasZoomOut,
+            niri_ipc::Action::CanvasZoomIn { at_cursor } => Self::CanvasZoomIn(at_cursor),
+            niri_ipc::Action::CanvasZoomOut { at_cursor } => Self::CanvasZoomOut(at_cursor),
             niri_ipc::Action::CanvasSetZoom { zoom } => Self::CanvasSetZoom(FloatOrInt(zoom)),
             niri_ipc::Action::CanvasFit {} => Self::CanvasFit,
             niri_ipc::Action::CanvasHome {} => Self::CanvasHome,
@@ -1259,6 +1262,19 @@ where
         }
 
         let press_action = press_action.or(direct_action);
+
+        // rice: if-canvas takes a canvas action and an optional strip action.
+        for action in press_action.iter().chain(release_action.iter()) {
+            if let Action::IfCanvas(actions) = action {
+                if !(1..=2).contains(&actions.len()) {
+                    ctx.emit_error(DecodeError::unexpected(
+                        node,
+                        "bind",
+                        "if-canvas takes one or two actions: for canvas and for strip workspaces",
+                    ));
+                }
+            }
+        }
 
         if release_action.is_some() && key.trigger.is_scroll() {
             ctx.emit_error(DecodeError::unexpected(

@@ -204,31 +204,6 @@ workspace render geometry origin, divided by the overview zoom).
 `set_canvas_transform(t)`, `canvas_plane_rects()`, `canvas_plane_rect(id)`,
 `set_canvas_plane_pos(id, plane, animate)`, `is_pinned(id)`, `set_pinned(id, bool)`.
 
-### Hook for real pointer input under zoom
-
-`Workspace::window_under()` delegates to `Workspace::canvas_window_under()` (in
-`canvas_ext.rs`). It hit-tests the floating tiles at `pos / zoom` (unscaled view) and today
-returns the stock `HitType::Input { win_pos }` at zoom 1 and `hit.to_activate()` otherwise (like
-the overview), so clicks on scaled windows only focus them; `resize_edges_under()` returns
-`None` at zoom ≠ 1. To add scaled input as an additive change:
-
-1. Append `HitType::ScaledInput { win_pos: Point<f64, Logical>, zoom: f64 }` at the end of
-   `HitType` (`src/layout/mod.rs`), with `offset_win_pos` adding the offset to `win_pos` and
-   `to_activate` downgrading it.
-2. In `canvas_window_under`, for zoom ≠ 1 return `ScaledInput { win_pos: win_pos_u.upscale(zoom),
-   zoom }` instead of `to_activate()` (`win_pos_u` is the `Input` hit's `win_pos`, the buffer
-   origin in unscaled view coordinates). `Monitor::window_under` already shifts it by the
-   workspace origin and already downgrades everything while the overview is open.
-3. Where niri turns a hit into a pointer focus (`Niri::contents_under` / `window_under` in
-   `src/niri.rs`), handle `ScaledInput`: surface-local position is `(pos - win_pos) / zoom`; look
-   up the (sub)surface with that local position, and hand smithay a focus location of
-   `pos - local` so that its `pos - focus_loc` arithmetic yields the scaled local position (the
-   focus is recomputed on every motion event). Relative-pointer deltas and pointer constraints
-   regions then need the same `/ zoom`.
-4. Mod+drag pan grab and Mod+wheel zoom-at-cursor: use `Layout::canvas_pan_to` /
-   `CanvasView::jump_to` for direct manipulation and `Layout::canvas_zoom_in(Some(anchor))` with
-   the pointer position as the anchor.
-
 ### Planned IPC shape (next agent)
 
 - `WindowLayout.pos_in_canvas: Option<(f64, f64)>` – plane position of the tile (canvas windows),
@@ -270,12 +245,9 @@ private D-Bus session, and the built `niri -c test.kdl` started inside it with
 
 ## Known limitations and deviations
 
-- Pointer input to windows is activate-only while the zoom is not exactly 1.0; interactive
-  resize is disabled at zoom ≠ 1 (see the hook above).
-- Mod+drag of a canvas window: the dragged tile is drawn at full size (only the overview zoom
-  applies to the dragged tile) and semi-transparent (canvas windows count as tiled once they
-  leave the workspace, so that moving them to a strip workspace tiles them); it lands exactly
-  where it is dropped (view → plane conversion).
+- Mod+drag of a canvas window: the dragged tile is semi-transparent (canvas windows count as
+  tiled once they leave the workspace, so that moving them to a strip workspace tiles them).
+  Pointer-input limitations under zoom are listed in "Canvas pointer input".
 - Deviation: a window that is floating on a *strip* workspace and moved by keyboard onto a
   canvas keeps its relative position in the viewport (stock floating semantics) instead of
   landing at the viewport centre; tiled windows and windows from other canvases land centred.
@@ -303,11 +275,145 @@ private D-Bus session, and the built `niri -c test.kdl` started inside it with
 
 ## Follow-ups
 
-- Scaled pointer input (hook above), including relative pointer and constraints.
-- Mod+drag pan grab and Mod+wheel zoom-at-cursor (anchor = pointer).
 - IPC events and requests listed above.
 - Hidden workspace for a scratchpad.
+- ~~Scaled pointer input, Mod+drag pan, Mod+wheel zoom-at-cursor~~: done, see "Canvas
+  pointer input" below. Open: touch input and pointer constraints at zoom ≠ 1.
 - ~~Plane grid / dot background, named regions, title strips~~: done, see "Decorations" below.
+
+## Canvas pointer input
+
+Real pointer input to windows at any canvas zoom, mouse/touchpad pan and zoom.
+
+### Behaviour
+
+- **Scaled input.** Clicks, motion, scroll, enter/leave and drag-and-drop reach canvas windows
+  at any zoom with surface-local coordinates `(pos − win_view_pos) / zoom`. Popups and
+  subsurfaces are hit-tested in the same unscaled window coordinates (`Window::surface_under`
+  with `WindowSurfaceType::ALL`), so they are consistent with what is drawn. While a button is
+  held (implicit grab, e.g. selecting text by dragging), motion keeps being scaled, also outside
+  the window. Relative-pointer deltas are divided by the zoom. The cursor image is not scaled.
+  At zoom 1 hits are the stock `HitType::Input`, bit-identical to upstream.
+- **Drag-and-drop** onto scaled windows targets the right surface with scaled coordinates
+  (smithay's DnD grab uses the per-motion focus location, see the mechanism below).
+- **Interactive move** (Mod+LMB, or a client move request): over a canvas workspace the dragged
+  tile is drawn at that canvas's zoom (and scaled input hit-tests it), so the grabbed point stays
+  under the pointer and the window lands exactly where it is drawn. Over strip workspaces or the
+  overview it is drawn as before.
+- **Interactive resize** (Mod+RMB, double-click gestures, and client resize requests from CSD
+  edges): resize edges are found through the zoom, and pointer deltas are divided by the zoom
+  for canvas windows (pinned ones too).
+- **Mouse pan** (`src/input/canvas_pan_grab.rs`, `CanvasPanGrab`): Mod+MMB anywhere on a canvas
+  workspace (instead of the stock view-offset / workspace-switch gesture) and Mod+LMB on the
+  empty plane (also over background/bottom layer surfaces, not over top/overlay ones) pan the
+  canvas 1:1 with the pointer (plane delta = view delta / zoom, f64, no rounding). Relative
+  motion is preferred and the pointer wraps around the output edges in both axes, like the stock
+  Mod+MMB view-offset gesture. On release the view glides with the release velocity: two
+  `SwipeTracker`s (x, y) measure it, a zero-delta sample at the release time drops stale history
+  (holding still before releasing does not glide), the glide distance is the tracker's projected
+  end position (touchpad deceleration), and the pan spring starts with the release velocity
+  (`CanvasView::glide`). No glide while a zoom animation runs, or with the pan animation `off`.
+- **Touchpad**: on a canvas workspace the horizontal 3-finger swipe (the one that scrolls the
+  strip) pans the canvas in 2D (both axes, `working-area width / 1200` view px per unit like the
+  strip gesture), with the same glide on release (none if libinput cancels the gesture). The
+  vertical 3-finger swipe still switches workspaces; 4 fingers still open the overview.
+- **Pinch zoom**: a touchpad pinch over a canvas zooms continuously around the cursor (zoom =
+  start zoom × pinch scale, with `pinch-sensitivity`, clamped to `zoom-steps`) when it has 3+
+  fingers, or Mod is held, or it starts over the empty plane. Two-finger pinches over windows go
+  to the window as before. Frame-width compensation is applied when the pinch ends.
+- **Zoom at cursor**: `canvas-zoom-in at-cursor=true` / `canvas-zoom-out at-cursor=true`
+  (IPC: `CanvasZoomIn { at_cursor }`, CLI `--at-cursor`, `serde(default)`) step the zoom of the
+  canvas workspace under the cursor keeping the plane point under the cursor fixed; without the
+  flag, or when the cursor is not over a canvas, they act on the focused workspace around the
+  working area centre as before.
+- **`if-canvas`** (config only): `if-canvas { <canvas action>; <strip action>; }` runs the
+  first child if the focused workspace is a canvas and the second (optional) one otherwise, so
+  one key does different things per mode. One or two children, otherwise a config error.
+- **Focus-follows-mouse and warp**: FFM targets the window drawn under the pointer at any zoom
+  and never recentres the view (pointer focus never reveals). warp-mouse-to-focus (and the
+  tablet's map-to-focused-window) use the active canvas window's rectangle at the *target* view,
+  so after a keyboard reveal the pointer lands where the window ends up.
+
+Recommended binds (not in the default config; wheel binds are user config):
+
+```kdl
+binds {
+    // Mod+wheel: zoom at the cursor on canvas workspaces, switch workspaces on strip ones.
+    Mod+WheelScrollUp   cooldown-ms=150 { if-canvas { canvas-zoom-in  at-cursor=true; focus-workspace-up;   }; }
+    Mod+WheelScrollDown cooldown-ms=150 { if-canvas { canvas-zoom-out at-cursor=true; focus-workspace-down; }; }
+}
+```
+
+### Mechanism
+
+- `HitType::ScaledInput { win_pos, zoom }` (appended to the enum; `win_pos` is the buffer
+  origin as drawn, `offset_win_pos` shifts it, `to_activate` downgrades it, `HitType::scaled(z)`
+  converts an unscaled `Input` hit). `Monitor::window_under` downgrades it in the overview like
+  every other hit.
+- `niri::scaled_surface_under()`: `local = (pos − win_pos)/zoom − subsurface_offset`, and the
+  focus location handed to smithay is `pos − local`, so smithay's `pos − location` yields the
+  scaled local position. It depends on `pos`; this works because the pointer focus is
+  recomputed on every motion event (`contents_under()`), and smithay's DnD grab and xdg popup
+  grab use that per-motion focus too. `ClickGrab` (implicit grab while a button is held) gets
+  the zoom from `PointContents::scaled_input_zoom()` (`SeatHandler::click_grab` in
+  `src/handlers/mod.rs`) and recomputes the location per motion from the surface origin at the
+  press.
+- Gesture state lives in `WorkspaceCanvas` (`pan_gesture: Option<CanvasPanGesture>`,
+  `zoom_gesture: Option<f64>`); `CanvasView::pan_by_plane()` shifts the current and target
+  transforms and a running animation's plane points together, so a zoom animation continues
+  while dragging.
+
+### API
+
+`Layout`: `canvas_workspace_under(output, pos) -> Option<(WorkspaceId, anchor)>`,
+`canvas_zoom_step_at(ws_id, zoom_in, anchor)`, `canvas_pan_gesture_begin(ws_id, is_touchpad)`,
+`canvas_pan_gesture_update(delta, timestamp, is_touchpad)`,
+`canvas_pan_gesture_end(Option<release_time>, Option<is_touchpad>)`,
+`canvas_zoom_gesture_begin(ws_id)`, `canvas_zoom_gesture_update(scale, Option<anchor>)`,
+`canvas_zoom_gesture_end()` (updates/ends return `None` when no such gesture is ongoing, else the
+output to redraw). `Workspace`: the same per workspace plus `has_canvas_pan_gesture`,
+`has_canvas_zoom_gesture`. `CanvasView`: `glide(clock, plane_delta, plane_speed, focus, cfg)`,
+`pan_by_plane(delta)`. `Niri::canvas_under_cursor()`, `Niri::pointer_over_top_layer()`,
+`PointContents::{scaled_input_zoom, without_scaled_input}`.
+
+### Files
+
+| File | Change |
+| --- | --- |
+| `src/input/canvas_pan_grab.rs` (new) | `CanvasPanGrab` |
+| `src/tests/canvas_input.rs` (new) | client-level tests: click/motion/leave at zoom 0.5, drag while a button is held, zoom 1 unchanged, scroll at 0.62 |
+| `src/input/canvas_actions.rs` | at-cursor zoom, pinch helpers, `Niri::canvas_under_cursor`, `pointer_over_top_layer` |
+| `src/input/click_grab.rs` | scaled focus location while a button is held |
+| `src/input/mod.rs` | Mod+MMB / Mod+LMB canvas pan, pointer wrap, relative-motion scaling, touch fallback, touchpad 3-finger pan, pinch, `if-canvas` |
+| `src/niri.rs` | `ScaledInput` in `contents_under`, `scaled_surface_under`, `PointContents` helpers, no constraint activation on scaled windows, window-cast cursor position |
+| `src/handlers/mod.rs` | `click_grab` passes the zoom (3 lines) |
+| `src/layout/mod.rs` | `HitType::ScaledInput`, `HitType::scaled`; interactive move drawn/hit/dropped at the canvas zoom |
+| `src/layout/canvas.rs` | `CanvasView::{glide, pan_by_plane}`, gesture state, Layout API above |
+| `src/layout/workspace/canvas_ext.rs` | scaled hits, `canvas_resize_edges_under`, `canvas_resize_delta`, gestures, warp rectangle at the target view |
+| `src/layout/workspace.rs` | `resize_edges_under` and `interactive_resize_update` hooks (2 lines) |
+| `niri-config/src/binds.rs`, `niri-ipc/src/lib.rs` | `at-cursor` flag, `if-canvas` |
+| `src/layout/tests.rs`, `src/layout/tests/canvas.rs`, `src/tests/client.rs`, `niri-config/src/canvas.rs` | gesture ops in the randomized tests, layout tests, `wl_pointer` recording in the test client, config parse tests |
+
+### Limitations
+
+- **Touch** at zoom ≠ 1 is activate-only (tapping focuses the window; no touch events reach it):
+  smithay keeps the touch-down focus location for the whole touch sequence, so scaled
+  coordinates cannot be delivered. Touch at zoom 1 is unchanged.
+- **Pointer constraints** (lock/confine) are not activated on windows drawn scaled. A
+  constraint that was already active when the zoom changed keeps working, with confinement
+  regions checked against unscaled motion.
+- **Tablet** tools get scaled coordinates (their focus is recomputed per event); not tested on
+  hardware.
+- The interactive-move tile switches between canvas zoom and full size abruptly when it crosses
+  between a canvas and a strip workspace (other monitor or the overview); popups of the moved
+  window are positioned for the unscaled window.
+- Pinch zoom needs 3+ fingers, Mod, or the empty plane, to keep two-finger pinches for apps.
+- `if-canvas` checks the focused workspace, also for pointer binds.
+- Runtime-tested in the nested session (winit backend, virtual pointer/keyboard) with foot:
+  clicks, typing, scroll, drag-selection at 0.62 and Mod+MMB / Mod+LMB pan, Mod+RMB resize,
+  Mod+LMB move, Mod+wheel zoom at cursor, `if-canvas` fall-through, focus-follows-mouse. The
+  glide was only covered by layout tests (the nested config has animations off); touchpad
+  gestures were not tested on hardware.
 
 ## Decorations: title strips, focus ring gap, canvas grid and regions
 

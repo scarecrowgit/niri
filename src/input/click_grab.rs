@@ -18,14 +18,41 @@ use smithay::utils::{Logical, Point};
 pub struct ClickGrab<D: SeatHandler> {
     start_data: GrabStartData<D>,
     focus: Option<(D::PointerFocus, Point<f64, Logical>)>,
+    /// rice: origin (global, as drawn) and zoom of a focused surface drawn scaled (zoomed
+    /// canvas).
+    scaled: Option<(Point<f64, Logical>, f64)>,
 }
 
 impl<D: SeatHandler> ClickGrab<D> {
-    pub fn new(start_data: GrabStartData<D>) -> Self {
+    /// Creates the grab; `zoom` is the scale the focused surface is drawn at, if it is drawn
+    /// scaled.
+    ///
+    /// The focus location of a scaled surface is chosen such that smithay's `pos - location`
+    /// gives the scaled-down local position (see `niri::scaled_surface_under()`), so it has to
+    /// follow the pointer: keeping it fixed would move the pointer within the surface at the
+    /// unscaled speed while dragging.
+    pub fn new(start_data: GrabStartData<D>, zoom: Option<f64>) -> Self {
+        let scaled = zoom
+            .filter(|zoom| *zoom > 0. && zoom.is_finite())
+            .and_then(|zoom| {
+                let (_, loc) = start_data.focus.as_ref()?;
+                let pos = start_data.location;
+                Some((pos - (pos - *loc).upscale(zoom), zoom))
+            });
         Self {
             focus: start_data.focus.clone(),
             start_data,
+            scaled,
         }
+    }
+
+    fn focus_at(&self, pos: Point<f64, Logical>) -> Option<(D::PointerFocus, Point<f64, Logical>)> {
+        let (focus, loc) = self.focus.clone()?;
+        let loc = match self.scaled {
+            Some((origin, zoom)) => pos - (pos - origin).downscale(zoom),
+            None => loc,
+        };
+        Some((focus, loc))
     }
 }
 
@@ -37,7 +64,7 @@ impl<D: SeatHandler + 'static> PointerGrab<D> for ClickGrab<D> {
         _focus: Option<(<D as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
-        handle.motion(data, self.focus.clone(), event);
+        handle.motion(data, self.focus_at(event.location), event);
     }
 
     fn relative_motion(

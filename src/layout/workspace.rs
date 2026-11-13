@@ -1913,9 +1913,9 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
-        // rice: no interactive resize through a zoomed canvas (yet).
-        if self.canvas_is_zoomed() {
-            return None;
+        // rice: canvas tiles are hit-tested through the canvas transform.
+        if self.is_canvas() {
+            return self.canvas_resize_edges_under(pos);
         }
 
         self.tiles_with_render_positions()
@@ -2094,6 +2094,7 @@ impl<W: LayoutElement> Workspace<W> {
         window: &W::Id,
         delta: Point<f64, Logical>,
     ) -> bool {
+        let delta = self.canvas_resize_delta(window, delta); // rice: view -> canvas deltas
         if self.floating.has_window(window) {
             self.floating.interactive_resize_update(window, delta)
         } else {

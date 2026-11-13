@@ -360,6 +360,15 @@ mod tests {
                 Mod+Home { canvas-home; }
                 Mod+G { canvas-fly-to-window; }
                 Mod+P { toggle-window-pinned; }
+                Mod+WheelScrollUp cooldown-ms=50 { canvas-zoom-in at-cursor=true; }
+                Mod+WheelScrollDown { canvas-zoom-out at-cursor=true; }
+                Mod+Ctrl+WheelScrollDown cooldown-ms=150 {
+                    if-canvas {
+                        canvas-zoom-out at-cursor=true
+                        focus-workspace-down
+                    }
+                }
+                Mod+Ctrl+WheelScrollUp { if-canvas { canvas-zoom-in; }; }
             }
             "#,
         )
@@ -384,14 +393,42 @@ mod tests {
                 Action::CanvasPanUp,
                 Action::CanvasPanDown,
                 Action::CanvasPanTo(FloatOrInt(-100.), FloatOrInt(250.5)),
-                Action::CanvasZoomIn,
-                Action::CanvasZoomOut,
+                Action::CanvasZoomIn(false),
+                Action::CanvasZoomOut(false),
                 Action::CanvasSetZoom(FloatOrInt(1.)),
                 Action::CanvasFit,
                 Action::CanvasHome,
                 Action::CanvasFlyToWindow,
                 Action::ToggleWindowPinned,
+                Action::CanvasZoomIn(true),
+                Action::CanvasZoomOut(true),
+                Action::IfCanvas(vec![
+                    Action::CanvasZoomOut(true),
+                    Action::FocusWorkspaceDown
+                ]),
+                Action::IfCanvas(vec![Action::CanvasZoomIn(false)]),
             ]
         );
+    }
+
+    #[test]
+    fn if_canvas_arity() {
+        let config = Config::parse_mem(
+            r#"
+            binds {
+                Mod+X { if-canvas { canvas-fit; canvas-home; canvas-zoom-in; }; }
+            }
+            "#,
+        );
+        assert!(config.is_err());
+
+        let config = Config::parse_mem(
+            r#"
+            binds {
+                Mod+X { if-canvas; }
+            }
+            "#,
+        );
+        assert!(config.is_err());
     }
 }

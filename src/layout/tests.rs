@@ -806,6 +806,83 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
+    // rice: canvas pointer and gesture input (nested to keep the Op strategy small).
+    CanvasInput(CanvasInputOp),
+}
+
+/// rice: canvas pointer and gesture input operations.
+#[derive(Debug, Clone, Copy, Arbitrary)]
+enum CanvasInputOp {
+    PanBegin {
+        is_touchpad: bool,
+    },
+    PanUpdate {
+        #[proptest(strategy = "-400f64..400f64")]
+        dx: f64,
+        #[proptest(strategy = "-400f64..400f64")]
+        dy: f64,
+        timestamp: Duration,
+        is_touchpad: bool,
+    },
+    PanEnd {
+        timestamp: Option<Duration>,
+        is_touchpad: Option<bool>,
+    },
+    ZoomBegin,
+    ZoomUpdate {
+        #[proptest(strategy = "0.05f64..8f64")]
+        scale: f64,
+        #[proptest(strategy = "proptest::option::of(arbitrary_canvas_anchor())")]
+        anchor: Option<(f64, f64)>,
+    },
+    ZoomEnd,
+    ZoomStepAtActive {
+        zoom_in: bool,
+        #[proptest(strategy = "proptest::option::of(arbitrary_canvas_anchor())")]
+        anchor: Option<(f64, f64)>,
+    },
+}
+
+impl CanvasInputOp {
+    fn apply(self, layout: &mut Layout<TestWindow>) {
+        match self {
+            CanvasInputOp::PanBegin { is_touchpad } => {
+                if let Some(ws_id) = layout.active_workspace().map(|ws| ws.id()) {
+                    layout.canvas_pan_gesture_begin(ws_id, is_touchpad);
+                }
+            }
+            CanvasInputOp::PanUpdate {
+                dx,
+                dy,
+                timestamp,
+                is_touchpad,
+            } => {
+                layout.canvas_pan_gesture_update(Point::from((dx, dy)), timestamp, is_touchpad);
+            }
+            CanvasInputOp::PanEnd {
+                timestamp,
+                is_touchpad,
+            } => {
+                layout.canvas_pan_gesture_end(timestamp, is_touchpad);
+            }
+            CanvasInputOp::ZoomBegin => {
+                if let Some(ws_id) = layout.active_workspace().map(|ws| ws.id()) {
+                    layout.canvas_zoom_gesture_begin(ws_id);
+                }
+            }
+            CanvasInputOp::ZoomUpdate { scale, anchor } => {
+                layout.canvas_zoom_gesture_update(scale, anchor.map(Point::from));
+            }
+            CanvasInputOp::ZoomEnd => {
+                layout.canvas_zoom_gesture_end();
+            }
+            CanvasInputOp::ZoomStepAtActive { zoom_in, anchor } => {
+                if let Some(ws_id) = layout.active_workspace().map(|ws| ws.id()) {
+                    layout.canvas_zoom_step_at(ws_id, zoom_in, anchor.map(Point::from));
+                }
+            }
+        }
+    }
 }
 
 impl Op {
@@ -1709,6 +1786,7 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.toggle_window_pinned(id.as_ref());
             }
+            Op::CanvasInput(op) => op.apply(layout),
         }
     }
 }

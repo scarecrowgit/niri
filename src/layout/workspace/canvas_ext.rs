@@ -11,6 +11,7 @@
 //! - `self.canvas.strip` holds the strip arrangement to restore when leaving canvas mode.
 
 use std::rc::Rc;
+use std::time::Duration;
 
 use niri_config::WorkspaceMode;
 use niri_ipc::WindowLayout;
@@ -18,10 +19,12 @@ use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::{FloatingActive, Workspace, WorkspaceAddWindowTarget, WorkspaceRenderElement};
+use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::canvas::{
     bounding_box, compensated_frame_width, fit_transform, next_zoom_step, push_to_contain,
-    rect_center, CanvasMemory, CanvasPanDirection, CanvasTransform, CanvasView,
+    rect_center, CanvasMemory, CanvasPanDirection, CanvasPanGesture, CanvasTransform, CanvasView,
     CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN, CANVAS_FIT_PADDING,
+    CANVAS_TOUCHPAD_GESTURE_MOVEMENT,
 };
 use crate::layout::scrolling::{Column, ColumnWidth, StripArrangement};
 use crate::layout::tile::Tile;
@@ -40,6 +43,7 @@ pub(super) fn scale_ipc_layout(mut layout: WindowLayout, zoom: f64) -> WindowLay
     }
     layout
 }
+use crate::utils::ResizeEdge;
 
 impl<W: LayoutElement> Workspace<W> {
     // ---------------------------------------------------------------------------------------
@@ -341,6 +345,8 @@ impl<W: LayoutElement> Workspace<W> {
         });
         self.canvas.view.jump_to(CanvasTransform::IDENTITY);
         self.canvas.cascade = None;
+        self.canvas.pan_gesture = None;
+        self.canvas.zoom_gesture = None;
         self.sync_canvas();
 
         // Windows that stayed in the scrolling space (fullscreen) restore per strip rules.
@@ -584,7 +590,8 @@ impl<W: LayoutElement> Workspace<W> {
         self.floating.set_canvas_transform(transform);
 
         let frame_zoom = if self.is_canvas() { transform.zoom } else { 1. };
-        let zoom_settled = !self.canvas.view.is_zoom_animating();
+        let zoom_settled =
+            !self.canvas.view.is_zoom_animating() && self.canvas.zoom_gesture.is_none();
         // rice: tiles get their canvas options (decorations) as soon as the mode changes.
         let mode_changed = self.floating.options().canvas_tile_zoom.is_some() != self.is_canvas();
         if (zoom_settled && frame_zoom != self.canvas.frame_zoom) || mode_changed {
@@ -763,14 +770,25 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     /// Active window rectangle in view coordinates clamped to the working area.
+    ///
+    /// Computed at the target transform, so that warp-mouse-to-focus lands where the window ends
+    /// up once a reveal animation finishes.
     pub(super) fn canvas_active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
-        let zoom = self.canvas_zoom();
+        let current = self.canvas_transform()?;
+        let target = self.canvas_target_transform()?;
         let active = self.floating.active_window()?.id().clone();
         let (tile, pos) = self
             .floating
             .tiles_with_offsets()
             .find(|(tile, _)| tile.window().id() == &active)?;
+        // Pinned tiles keep their unscaled view position; others keep their plane position.
+        let pos = if self.floating.is_pinned(&active) {
+            pos
+        } else {
+            target.plane_to_unscaled(current.unscaled_to_plane(pos))
+        };
         let window_pos = pos + tile.window_loc();
+        let zoom = target.zoom;
         let rect = Rectangle::new(window_pos.upscale(zoom), tile.window_size().upscale(zoom));
         self.working_area.intersection(rect)
     }
@@ -810,12 +828,10 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Hit-tests a canvas workspace at `pos` (workspace view coordinates).
     ///
-    /// **Hook for scaled pointer input.** At zoom 1 this returns regular `HitType::Input` hits.
-    /// At zoom ≠ 1 hits on canvas windows are downgraded to activate-only, like in the overview,
-    /// because the window surface would receive unscaled coordinates. To deliver real input at
-    /// any zoom, return the hit with `win_pos` in *view* coordinates
-    /// (`win_pos_u * zoom`) together with the zoom, and compute surface-local coordinates as
-    /// `(pos - win_pos) / zoom` where the pointer focus is resolved (see `RICE-FORK.md`).
+    /// Canvas tiles are hit-tested in unscaled view coordinates (`pos / zoom`). At zoom 1 this
+    /// returns regular `HitType::Input` hits; at zoom ≠ 1 input hits become
+    /// `HitType::ScaledInput { win_pos: win_pos_u * zoom, zoom }`, and the pointer focus code
+    /// (`Niri::contents_under()`) computes surface-local coordinates as `(pos - win_pos) / zoom`.
     pub(super) fn canvas_window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
         if self.is_floating_visible() {
             let zoom = self.canvas_zoom();
@@ -825,12 +841,212 @@ impl<W: LayoutElement> Workspace<W> {
                 .tiles_with_render_positions()
                 .find_map(|(tile, tile_pos)| HitType::hit_tile(tile, tile_pos, unscaled));
             if let Some((win, hit)) = hit {
-                let hit = if zoom == 1. { hit } else { hit.to_activate() };
-                return Some((win, hit));
+                return Some((win, hit.scaled(zoom)));
             }
         }
 
         self.scrolling.window_under(pos)
+    }
+
+    /// Interactive resize edges under `pos` (workspace view coordinates) on a canvas workspace,
+    /// consistent with [`Self::canvas_window_under`].
+    pub(super) fn canvas_resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+        let zoom = self.canvas_zoom();
+        let floating = self
+            .floating
+            .tiles_with_render_positions()
+            .filter(|_| self.is_floating_visible())
+            .map(|(tile, tile_pos)| (tile, tile_pos, pos.downscale(zoom)));
+        let scrolling = self
+            .scrolling
+            .tiles_with_render_positions()
+            .filter(|(_, _, visible)| *visible)
+            .map(|(tile, tile_pos, _)| (tile, tile_pos, pos));
+
+        floating.chain(scrolling).find_map(|(tile, tile_pos, pos)| {
+            let pos_within_tile = pos - tile_pos;
+            tile.hit(pos_within_tile)?;
+
+            let size = tile.tile_size();
+            let mut edges = ResizeEdge::empty();
+            if pos_within_tile.x < size.w / 3. {
+                edges |= ResizeEdge::LEFT;
+            } else if 2. * size.w / 3. < pos_within_tile.x {
+                edges |= ResizeEdge::RIGHT;
+            }
+            if pos_within_tile.y < size.h / 3. {
+                edges |= ResizeEdge::TOP;
+            } else if 2. * size.h / 3. < pos_within_tile.y {
+                edges |= ResizeEdge::BOTTOM;
+            }
+            Some(edges)
+        })
+    }
+
+    /// Scale of pointer deltas for interactive resizes of a window: canvas tiles are drawn at the
+    /// canvas zoom, so view deltas are divided by it.
+    pub(super) fn canvas_resize_delta(
+        &self,
+        window: &W::Id,
+        delta: Point<f64, Logical>,
+    ) -> Point<f64, Logical> {
+        // Pinned tiles are drawn at the canvas zoom too; fullscreen/maximized windows (in the
+        // scrolling space) are not.
+        if self.is_canvas() && self.floating.has_window(window) {
+            delta.downscale(self.canvas_zoom())
+        } else {
+            delta
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // Direct manipulation (mouse pan grab, touchpad swipe and pinch).
+    // ---------------------------------------------------------------------------------------
+
+    /// Whether a pan gesture is ongoing (of the given kind, if any).
+    pub fn has_canvas_pan_gesture(&self, is_touchpad: Option<bool>) -> bool {
+        self.canvas
+            .pan_gesture
+            .as_ref()
+            .is_some_and(|g| is_touchpad.is_none_or(|t| g.is_touchpad == t))
+    }
+
+    /// Whether a pinch zoom gesture is ongoing.
+    pub fn has_canvas_zoom_gesture(&self) -> bool {
+        self.canvas.zoom_gesture.is_some()
+    }
+
+    /// Starts a pan gesture; the view stops where it is (ongoing zoom animations continue).
+    pub fn canvas_pan_gesture_begin(&mut self, is_touchpad: bool) -> bool {
+        if !self.is_canvas() {
+            return false;
+        }
+        // Stop a glide or pan animation, but let a zoom animation finish.
+        if self.canvas.view.is_animating() && !self.canvas.view.is_zoom_animating() {
+            let current = self.canvas.view.current();
+            self.canvas.view.jump_to(current);
+        }
+        let norm_factor = if is_touchpad {
+            self.working_area.size.w / CANVAS_TOUCHPAD_GESTURE_MOVEMENT
+        } else {
+            1.
+        };
+        self.canvas.pan_gesture = Some(CanvasPanGesture {
+            tracker_x: SwipeTracker::new(),
+            tracker_y: SwipeTracker::new(),
+            is_touchpad,
+            norm_factor,
+        });
+        self.sync_canvas();
+        true
+    }
+
+    /// Pans by `delta` gesture units (view pixels for the pointer); positive values move the
+    /// view towards positive plane coordinates (the content moves the other way).
+    pub fn canvas_pan_gesture_update(
+        &mut self,
+        delta: Point<f64, Logical>,
+        timestamp: Duration,
+        is_touchpad: bool,
+    ) -> bool {
+        let Some(gesture) = &mut self.canvas.pan_gesture else {
+            return false;
+        };
+        if gesture.is_touchpad != is_touchpad {
+            return false;
+        }
+        gesture.tracker_x.push(delta.x, timestamp);
+        gesture.tracker_y.push(delta.y, timestamp);
+        let view_delta = delta.upscale(gesture.norm_factor);
+
+        let zoom = self.canvas.view.current().zoom;
+        self.canvas.view.pan_by_plane(view_delta.downscale(zoom));
+        self.sync_canvas();
+        true
+    }
+
+    /// Ends the pan gesture. With a release `timestamp` the view glides on with the release
+    /// velocity; without one it stays where it is.
+    pub fn canvas_pan_gesture_end(&mut self, timestamp: Option<Duration>) -> bool {
+        let Some(mut gesture) = self.canvas.pan_gesture.take() else {
+            return false;
+        };
+        let Some(timestamp) = timestamp else {
+            return true;
+        };
+
+        // Drop history older than the release, so that holding still before releasing does
+        // not glide.
+        gesture.tracker_x.push(0., timestamp);
+        gesture.tracker_y.push(0., timestamp);
+
+        let norm = gesture.norm_factor;
+        let velocity = Point::<f64, Logical>::from((
+            gesture.tracker_x.velocity(),
+            gesture.tracker_y.velocity(),
+        ))
+        .upscale(norm);
+        let glide = Point::<f64, Logical>::from((
+            gesture.tracker_x.projected_end_pos() - gesture.tracker_x.pos(),
+            gesture.tracker_y.projected_end_pos() - gesture.tracker_y.pos(),
+        ))
+        .upscale(norm);
+
+        let zoom = self.canvas.view.current().zoom;
+        let speed = velocity.x.hypot(velocity.y) / zoom;
+        let pan = self.options.animations.canvas_pan.0;
+        let focus = rect_center(self.working_area);
+        self.canvas
+            .view
+            .glide(&self.clock, glide.downscale(zoom), speed, focus, pan);
+        self.sync_canvas();
+        true
+    }
+
+    /// Starts a pinch zoom gesture.
+    pub fn canvas_zoom_gesture_begin(&mut self) -> bool {
+        if !self.is_canvas() {
+            return false;
+        }
+        let current = self.canvas.view.current();
+        self.canvas.view.jump_to(current);
+        self.canvas.zoom_gesture = Some(current.zoom);
+        self.sync_canvas();
+        true
+    }
+
+    /// Sets the zoom to `scale` times the zoom at the gesture start (clamped to the configured
+    /// range), keeping the plane point under `anchor` (view coordinates; default: working area
+    /// centre) fixed.
+    pub fn canvas_zoom_gesture_update(
+        &mut self,
+        scale: f64,
+        anchor: Option<Point<f64, Logical>>,
+    ) -> bool {
+        let Some(start) = self.canvas.zoom_gesture else {
+            return false;
+        };
+        let anchor = anchor.unwrap_or_else(|| rect_center(self.working_area));
+        let zoom = start * scale;
+        if !zoom.is_finite() || !anchor.x.is_finite() || !anchor.y.is_finite() {
+            return true;
+        }
+        let zoom = self.options.layout.canvas.clamp_zoom(zoom);
+        let current = self.canvas.view.current();
+        self.canvas
+            .view
+            .jump_to(current.zoomed_around(anchor, zoom));
+        self.sync_canvas();
+        true
+    }
+
+    /// Ends the pinch zoom gesture.
+    pub fn canvas_zoom_gesture_end(&mut self) -> bool {
+        if self.canvas.zoom_gesture.take().is_none() {
+            return false;
+        }
+        self.sync_canvas();
+        true
     }
 
     #[cfg(test)]
@@ -840,6 +1056,9 @@ impl<W: LayoutElement> Workspace<W> {
                 self.floating.canvas_transform().is_some(),
                 "canvas workspace must have an unbounded floating space"
             );
+            if let Some(gesture) = &self.canvas.pan_gesture {
+                assert!(gesture.norm_factor.is_finite() && gesture.norm_factor > 0.);
+            }
             assert!(
                 self.canvas.strip.is_some(),
                 "canvas workspace must have a saved strip arrangement"
@@ -890,6 +1109,14 @@ impl<W: LayoutElement> Workspace<W> {
         } else {
             assert!(self.floating.canvas_transform().is_none());
             assert!(self.canvas.strip.is_none());
+            assert!(
+                self.canvas.pan_gesture.is_none(),
+                "strip workspaces have no canvas gestures"
+            );
+            assert!(
+                self.canvas.zoom_gesture.is_none(),
+                "strip workspaces have no canvas gestures"
+            );
             assert_eq!(self.canvas.frame_zoom, 1.);
             for tile in self.tiles() {
                 assert!(
