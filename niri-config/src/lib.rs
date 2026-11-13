@@ -31,6 +31,7 @@ pub mod macros;
 pub mod animations;
 pub mod appearance;
 pub mod binds;
+pub mod canvas;
 pub mod debug;
 pub mod error;
 pub mod gestures;
@@ -47,6 +48,7 @@ pub mod workspace;
 pub use crate::animations::{Animation, Animations};
 pub use crate::appearance::*;
 pub use crate::binds::*;
+pub use crate::canvas::{Canvas, CanvasPart, WorkspaceMode};
 pub use crate::debug::Debug;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
@@ -1994,6 +1996,19 @@ mod tests {
                     b: 0.0,
                     a: 1.0,
                 },
+                default_workspace_mode: Strip,
+                canvas: Canvas {
+                    default_zoom: 0.62,
+                    zoom_steps: [
+                        0.4,
+                        0.5,
+                        0.62,
+                        0.75,
+                        0.9,
+                        1.0,
+                    ],
+                    pan_step: 120.0,
+                },
             },
             prefer_no_csd: true,
             cursor: Cursor {
@@ -2154,6 +2169,30 @@ mod tests {
                                 damping_ratio: 1.0,
                                 stiffness: 800,
                                 epsilon: 0.001,
+                            },
+                        ),
+                    },
+                ),
+                canvas_pan: CanvasPanAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 500,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
+                canvas_zoom: CanvasZoomAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 600,
+                                epsilon: 0.0001,
                             },
                         ),
                     },

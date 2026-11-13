@@ -6,6 +6,7 @@ use knuffel::ast::SpannedNode;
 use knuffel::errors::DecodeError;
 use knuffel::Decode as _;
 
+use crate::canvas::{CanvasPanAnim, CanvasZoomAnim};
 use crate::utils::{expand_home_path, expect_only_children, parse_arg_node, MergeWith};
 use crate::{FloatOrInt, Includes};
 
@@ -24,6 +25,9 @@ pub struct Animations {
     pub screenshot_ui_open: ScreenshotUiOpenAnim,
     pub overview_open_close: OverviewOpenCloseAnim,
     pub recent_windows_close: RecentWindowsCloseAnim,
+    // rice: infinite canvas view animations.
+    pub canvas_pan: CanvasPanAnim,
+    pub canvas_zoom: CanvasZoomAnim,
 }
 
 impl Default for Animations {
@@ -42,6 +46,8 @@ impl Default for Animations {
             screenshot_ui_open: Default::default(),
             overview_open_close: Default::default(),
             recent_windows_close: Default::default(),
+            canvas_pan: Default::default(),
+            canvas_zoom: Default::default(),
         }
     }
 }
@@ -76,6 +82,11 @@ pub struct AnimationsPart {
     pub overview_open_close: Option<OverviewOpenCloseAnim>,
     #[knuffel(child)]
     pub recent_windows_close: Option<RecentWindowsCloseAnim>,
+    // rice: infinite canvas view animations.
+    #[knuffel(child)]
+    pub canvas_pan: Option<CanvasPanAnim>,
+    #[knuffel(child)]
+    pub canvas_zoom: Option<CanvasZoomAnim>,
 }
 
 impl MergeWith<AnimationsPart> for Animations {
@@ -102,6 +113,8 @@ impl MergeWith<AnimationsPart> for Animations {
             screenshot_ui_open,
             overview_open_close,
             recent_windows_close,
+            canvas_pan,
+            canvas_zoom,
         );
     }
 }
@@ -607,7 +620,8 @@ impl Animation {
         }
     }
 
-    fn decode_node<S: knuffel::traits::ErrorSpan>(
+    // rice: pub(crate) so that crate::canvas can decode its animations.
+    pub(crate) fn decode_node<S: knuffel::traits::ErrorSpan>(
         node: &knuffel::ast::SpannedNode<S>,
         ctx: &mut knuffel::decode::Context<S>,
         default: Self,

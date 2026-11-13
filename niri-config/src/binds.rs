@@ -5,7 +5,8 @@ use bitflags::bitflags;
 use knuffel::errors::DecodeError;
 use miette::miette;
 use niri_ipc::{
-    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceReferenceArg,
+    ColumnDisplay, LayoutSwitchTarget, PositionChange, SizeChange, WorkspaceMode,
+    WorkspaceReferenceArg,
 };
 use smithay::input::keyboard::keysyms::KEY_NoSymbol;
 use smithay::input::keyboard::xkb::{keysym_from_name, KEYSYM_CASE_INSENSITIVE, KEYSYM_NO_FLAGS};
@@ -15,6 +16,7 @@ use tracing::warn;
 use crate::input::ModKey;
 use crate::recent_windows::{MruDirection, MruFilter, MruScope};
 use crate::utils::{expect_only_children, MergeWith};
+use crate::FloatOrInt;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Binds(pub Vec<Bind>);
@@ -553,6 +555,29 @@ pub enum Action {
     // Doesn't look like knuffel allows gating on #[cfg(test)]...
     #[knuffel(skip)]
     TestAction,
+
+    // rice: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
+    ToggleWorkspaceMode,
+    SetWorkspaceMode(#[knuffel(argument, str)] WorkspaceMode),
+    CanvasPanLeft,
+    CanvasPanRight,
+    CanvasPanUp,
+    CanvasPanDown,
+    CanvasPanTo(
+        #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
+        #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
+    ),
+    CanvasZoomIn,
+    CanvasZoomOut,
+    CanvasSetZoom(#[knuffel(argument)] FloatOrInt<0, 4>),
+    CanvasFit,
+    CanvasHome,
+    CanvasFlyToWindow,
+    #[knuffel(skip)]
+    CanvasFlyToWindowById(u64),
+    ToggleWindowPinned,
+    #[knuffel(skip)]
+    ToggleWindowPinnedById(u64),
 }
 
 impl From<niri_ipc::Action> for Action {
@@ -894,6 +919,27 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
+            // rice: infinite canvas actions.
+            niri_ipc::Action::ToggleWorkspaceMode {} => Self::ToggleWorkspaceMode,
+            niri_ipc::Action::SetWorkspaceMode { mode } => Self::SetWorkspaceMode(mode),
+            niri_ipc::Action::CanvasPanLeft {} => Self::CanvasPanLeft,
+            niri_ipc::Action::CanvasPanRight {} => Self::CanvasPanRight,
+            niri_ipc::Action::CanvasPanUp {} => Self::CanvasPanUp,
+            niri_ipc::Action::CanvasPanDown {} => Self::CanvasPanDown,
+            niri_ipc::Action::CanvasPanTo { x, y } => {
+                Self::CanvasPanTo(FloatOrInt(x), FloatOrInt(y))
+            }
+            niri_ipc::Action::CanvasZoomIn {} => Self::CanvasZoomIn,
+            niri_ipc::Action::CanvasZoomOut {} => Self::CanvasZoomOut,
+            niri_ipc::Action::CanvasSetZoom { zoom } => Self::CanvasSetZoom(FloatOrInt(zoom)),
+            niri_ipc::Action::CanvasFit {} => Self::CanvasFit,
+            niri_ipc::Action::CanvasHome {} => Self::CanvasHome,
+            niri_ipc::Action::CanvasFlyToWindow { id: None } => Self::CanvasFlyToWindow,
+            niri_ipc::Action::CanvasFlyToWindow { id: Some(id) } => Self::CanvasFlyToWindowById(id),
+            niri_ipc::Action::ToggleWindowPinned { id: None } => Self::ToggleWindowPinned,
+            niri_ipc::Action::ToggleWindowPinned { id: Some(id) } => {
+                Self::ToggleWindowPinnedById(id)
+            }
         }
     }
 }

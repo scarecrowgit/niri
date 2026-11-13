@@ -61,6 +61,10 @@ use serde::{Deserialize, Serialize};
 pub mod socket;
 pub mod state;
 
+// rice: infinite canvas workspace mode types.
+pub mod canvas;
+pub use canvas::WorkspaceMode;
+
 /// Request from client to niri.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "json-schema", derive(schemars::JsonSchema))]
@@ -1034,6 +1038,70 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
+    // rice: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
+    /// Toggle the focused workspace between strip (scrolling) and canvas mode.
+    ToggleWorkspaceMode {},
+    /// Set the window arrangement mode of the focused workspace.
+    SetWorkspaceMode {
+        /// Mode to set: "strip" or "canvas".
+        #[cfg_attr(feature = "clap", arg())]
+        mode: WorkspaceMode,
+    },
+    /// Pan the canvas view left by one pan step.
+    CanvasPanLeft {},
+    /// Pan the canvas view right by one pan step.
+    CanvasPanRight {},
+    /// Pan the canvas view up by one pan step.
+    CanvasPanUp {},
+    /// Pan the canvas view down by one pan step.
+    CanvasPanDown {},
+    /// Pan the canvas view so that its top-left corner shows this plane point.
+    CanvasPanTo {
+        /// Plane X coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        x: f64,
+        /// Plane Y coordinate in logical pixels.
+        #[cfg_attr(feature = "clap", arg(allow_hyphen_values = true))]
+        y: f64,
+    },
+    /// Zoom the canvas view in to the next zoom step.
+    CanvasZoomIn {},
+    /// Zoom the canvas view out to the previous zoom step.
+    CanvasZoomOut {},
+    /// Set the canvas zoom (clamped to the configured zoom-steps range).
+    CanvasSetZoom {
+        /// Zoom factor, e.g. 0.62 or 1.0.
+        #[cfg_attr(feature = "clap", arg())]
+        zoom: f64,
+    },
+    /// Fit all canvas windows into the view.
+    CanvasFit {},
+    /// Pan the canvas view back to the plane origin, keeping the zoom.
+    CanvasHome {},
+    /// Center the canvas view on a window.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Center the canvas view on the focused window")
+    )]
+    CanvasFlyToWindow {
+        /// Id of the window to fly to.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Toggle whether a canvas window stays fixed on screen while the view pans.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Toggle pinning of the focused canvas window")
+    )]
+    ToggleWindowPinned {
+        /// Id of the window to pin or unpin.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
 }
 
 /// Change in window or column size.
@@ -1567,6 +1635,12 @@ pub struct Workspace {
     pub is_focused: bool,
     /// Id of the active window on this workspace, if any.
     pub active_window_id: Option<u64>,
+    /// Window arrangement mode of this workspace (rice fork).
+    ///
+    /// Defaults to [`WorkspaceMode::Strip`] when absent, so replies from servers without canvas
+    /// support still parse.
+    #[serde(default)]
+    pub mode: WorkspaceMode,
 }
 
 /// Configured keyboard layouts.

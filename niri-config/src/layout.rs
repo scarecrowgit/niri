@@ -4,6 +4,7 @@ use niri_ipc::{ColumnDisplay, SizeChange};
 use crate::appearance::{
     Border, FocusRing, InsertHint, Shadow, TabIndicator, DEFAULT_BACKGROUND_COLOR,
 };
+use crate::canvas::{Canvas, CanvasPart, WorkspaceMode};
 use crate::utils::{expect_only_children, Flag, MergeWith};
 use crate::{BorderRule, Color, FloatOrInt, InsertHintPart, ShadowRule, TabIndicatorPart};
 
@@ -25,6 +26,9 @@ pub struct Layout {
     pub struts: Struts,
     pub background_color: Color,
     pub fullscreen_backdrop_color: Color,
+    // rice: infinite canvas workspace mode.
+    pub default_workspace_mode: WorkspaceMode,
+    pub canvas: Canvas,
 }
 
 impl Default for Layout {
@@ -54,6 +58,8 @@ impl Default for Layout {
             ],
             background_color: DEFAULT_BACKGROUND_COLOR,
             fullscreen_backdrop_color: Color::from_array_unpremul([0., 0., 0., 1.]),
+            default_workspace_mode: WorkspaceMode::default(),
+            canvas: Canvas::default(),
         }
     }
 }
@@ -70,6 +76,7 @@ impl MergeWith<LayoutPart> for Layout {
             always_center_single_column,
             empty_workspace_above_first,
             gaps,
+            canvas,
         );
 
         merge_clone!(
@@ -81,6 +88,7 @@ impl MergeWith<LayoutPart> for Layout {
             struts,
             background_color,
             fullscreen_backdrop_color,
+            default_workspace_mode,
         );
 
         if let Some(x) = part.default_column_width {
@@ -131,6 +139,11 @@ pub struct LayoutPart {
     pub background_color: Option<Color>,
     #[knuffel(child)]
     pub fullscreen_backdrop_color: Option<Color>,
+    // rice: infinite canvas workspace mode.
+    #[knuffel(child, unwrap(argument, str))]
+    pub default_workspace_mode: Option<WorkspaceMode>,
+    #[knuffel(child)]
+    pub canvas: Option<CanvasPart>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
