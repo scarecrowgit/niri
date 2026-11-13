@@ -4,16 +4,18 @@ use niri_config::utils::Flag;
 use niri_config::workspace::WorkspaceName;
 use niri_config::{
     CenterFocusedColumn, FloatOrInt, OutputName, Struts, TabIndicatorLength, TabIndicatorPosition,
-    WorkspaceReference,
+    WorkspaceMode, WorkspaceReference,
 };
 use proptest::prelude::*;
 use proptest_derive::Arbitrary;
 use smithay::output::{Mode, PhysicalProperties, Subpixel};
 use smithay::utils::Rectangle;
 
+use super::canvas::CanvasPanDirection;
 use super::*;
 
 mod animations;
+mod canvas; // rice
 mod fullscreen;
 
 impl<W: LayoutElement> Default for Layout<W> {
@@ -400,6 +402,23 @@ fn arbitrary_scroll_direction() -> impl Strategy<Value = ScrollDirection> {
     prop_oneof![Just(ScrollDirection::Left), Just(ScrollDirection::Right)]
 }
 
+fn arbitrary_workspace_mode() -> impl Strategy<Value = WorkspaceMode> {
+    prop_oneof![Just(WorkspaceMode::Strip), Just(WorkspaceMode::Canvas)]
+}
+
+fn arbitrary_canvas_pan_direction() -> impl Strategy<Value = CanvasPanDirection> {
+    prop_oneof![
+        Just(CanvasPanDirection::Left),
+        Just(CanvasPanDirection::Right),
+        Just(CanvasPanDirection::Up),
+        Just(CanvasPanDirection::Down),
+    ]
+}
+
+fn arbitrary_canvas_anchor() -> impl Strategy<Value = (f64, f64)> {
+    (-500f64..2500f64, -500f64..1500f64)
+}
+
 fn arbitrary_column_display() -> impl Strategy<Value = ColumnDisplay> {
     prop_oneof![Just(ColumnDisplay::Normal), Just(ColumnDisplay::Tabbed)]
 }
@@ -752,6 +771,37 @@ enum Op {
     UpdateConfig {
         #[proptest(strategy = "arbitrary_layout_part().prop_map(Box::new)")]
         layout_config: Box<niri_config::LayoutPart>,
+    },
+    // rice: canvas mode.
+    ToggleWorkspaceMode,
+    SetWorkspaceMode(#[proptest(strategy = "arbitrary_workspace_mode()")] WorkspaceMode),
+    CanvasPan(#[proptest(strategy = "arbitrary_canvas_pan_direction()")] CanvasPanDirection),
+    CanvasPanTo {
+        #[proptest(strategy = "-20000f64..20000f64")]
+        x: f64,
+        #[proptest(strategy = "-20000f64..20000f64")]
+        y: f64,
+    },
+    CanvasZoomIn {
+        #[proptest(strategy = "proptest::option::of(arbitrary_canvas_anchor())")]
+        anchor: Option<(f64, f64)>,
+    },
+    CanvasZoomOut {
+        #[proptest(strategy = "proptest::option::of(arbitrary_canvas_anchor())")]
+        anchor: Option<(f64, f64)>,
+    },
+    CanvasSetZoom(#[proptest(strategy = "-1f64..3f64")] f64),
+    CanvasFit,
+    CanvasHome,
+    CanvasFlyToWindow {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
+    CanvasRevealWindow(#[proptest(strategy = "1..=5usize")] usize),
+    CanvasEdgePush(#[proptest(strategy = "1..=5usize")] usize),
+    ToggleWindowPinned {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
     },
 }
 
@@ -1628,6 +1678,34 @@ impl Op {
 
                 layout.update_options(options);
             }
+            // rice: canvas mode.
+            Op::ToggleWorkspaceMode => layout.toggle_workspace_mode(),
+            Op::SetWorkspaceMode(mode) => layout.set_workspace_mode(mode),
+            Op::CanvasPan(direction) => layout.canvas_pan(direction),
+            Op::CanvasPanTo { x, y } => layout.canvas_pan_to(Point::from((x, y))),
+            Op::CanvasZoomIn { anchor } => layout.canvas_zoom_in(anchor.map(Point::from)),
+            Op::CanvasZoomOut { anchor } => layout.canvas_zoom_out(anchor.map(Point::from)),
+            Op::CanvasSetZoom(zoom) => layout.canvas_set_zoom(zoom, None),
+            Op::CanvasFit => layout.canvas_fit(),
+            Op::CanvasHome => layout.canvas_home(),
+            Op::CanvasFlyToWindow { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.canvas_fly_to_window(id.as_ref());
+            }
+            Op::CanvasRevealWindow(id) => {
+                if layout.has_window(&id) {
+                    layout.canvas_reveal_window(&id);
+                }
+            }
+            Op::CanvasEdgePush(id) => {
+                if layout.has_window(&id) {
+                    layout.canvas_edge_push(&id);
+                }
+            }
+            Op::ToggleWindowPinned { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.toggle_window_pinned(id.as_ref());
+            }
         }
     }
 }
@@ -1868,6 +1946,10 @@ fn operations_dont_panic() {
         Op::ConsumeOrExpelWindowRight { id: None },
         Op::MoveWorkspaceToOutput(1),
         Op::ToggleColumnTabbedDisplay,
+        // rice: canvas mode.
+        Op::ToggleWorkspaceMode,
+        Op::CanvasZoomOut { anchor: None },
+        Op::CanvasFit,
     ];
 
     for third in &every_op {
@@ -2047,6 +2129,10 @@ fn operations_from_starting_state_dont_panic() {
         Op::ConsumeOrExpelWindowLeft { id: None },
         Op::ConsumeOrExpelWindowRight { id: None },
         Op::ToggleColumnTabbedDisplay,
+        // rice: canvas mode.
+        Op::ToggleWorkspaceMode,
+        Op::CanvasZoomOut { anchor: None },
+        Op::CanvasFit,
     ];
 
     for third in &every_op {
@@ -4007,8 +4093,10 @@ prop_compose! {
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
+        default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
+            default_workspace_mode,
             gaps,
             struts,
             center_focused_column,
