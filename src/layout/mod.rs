@@ -75,6 +75,8 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
+// rice: infinite canvas workspace mode.
+pub mod canvas;
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
@@ -3883,7 +3885,8 @@ impl<W: LayoutElement> Layout<W> {
             return false;
         }
 
-        let zoom = mon.overview_zoom();
+        // rice: canvas tiles are additionally scaled by the canvas zoom.
+        let zoom = mon.overview_zoom() * ws.canvas_zoom();
 
         let is_floating = ws.is_floating(&window_id);
         let (tile, tile_offset, _visible) = ws
@@ -4373,14 +4376,17 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 // needed because empty_workspace_above_first could have modified the idx
-                let (tile, tile_offset, ws_geo) = mon
+                let (tile, tile_offset, ws_geo, canvas_zoom) = mon
                     .workspaces_with_render_geo_mut(false)
                     .find_map(|(ws, geo)| {
+                        let canvas_zoom = ws.canvas_zoom(); // rice
                         ws.tiles_with_render_positions_mut(false)
                             .find(|(tile, _)| tile.window().id() == &win_id)
-                            .map(|(tile, tile_offset)| (tile, tile_offset, geo))
+                            .map(|(tile, tile_offset)| (tile, tile_offset, geo, canvas_zoom))
                     })
                     .unwrap();
+                // rice: canvas tiles are additionally scaled by the canvas zoom.
+                let zoom = zoom * canvas_zoom;
                 let new_tile_render_loc = ws_geo.loc + tile_offset.upscale(zoom);
 
                 tile.animate_move_from((tile_render_loc - new_tile_render_loc).downscale(zoom));

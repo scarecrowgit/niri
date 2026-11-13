@@ -962,11 +962,14 @@ impl<W: LayoutElement> Monitor<W> {
         self.add_column(new_idx, column, activate, Some(config));
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
-        let (column, new_render_pos) = self.workspaces[new_idx]
+        // rice: a column moved onto a canvas workspace is spilled onto the plane.
+        let Some((column, new_render_pos)) = self.workspaces[new_idx]
             .scrolling_mut()
             .columns_with_render_positions_mut()
             .find(|(col, _pos)| col.id() == id)
-            .unwrap();
+        else {
+            return;
+        };
         column.animate_move_from_with_config(old_render_pos - new_render_pos, config);
         column.set_anim_y_between_workspaces();
     }

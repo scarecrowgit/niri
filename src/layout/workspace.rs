@@ -7,6 +7,7 @@ use niri_config::{
     CenterFocusedColumn, CornerRadius, OutputName, PresetSize, Workspace as WorkspaceConfig,
 };
 use niri_ipc::{ColumnDisplay, PositionChange, SizeChange, WindowLayout};
+use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::desktop::{layer_map_for_output, Window};
@@ -17,6 +18,7 @@ use smithay::utils::{Logical, Point, Rectangle, Serial, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::SurfaceCachedState;
 
+use super::canvas::WorkspaceCanvas;
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
@@ -42,6 +44,9 @@ use crate::utils::{
     ResizeEdge,
 };
 use crate::window::ResolvedWindowRules;
+
+// rice: infinite canvas mode (new `impl Workspace` methods live there).
+mod canvas_ext;
 
 #[derive(Debug)]
 pub struct Workspace<W: LayoutElement> {
@@ -112,6 +117,9 @@ pub struct Workspace<W: LayoutElement> {
 
     /// Unique ID of this workspace.
     id: WorkspaceId,
+
+    /// rice: strip/canvas mode and canvas view state.
+    canvas: WorkspaceCanvas<W::Id>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,6 +155,8 @@ niri_render_elements! {
     WorkspaceRenderElement<R> => {
         Scrolling = ScrollingSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
+        // rice: canvas windows scaled by the canvas zoom.
+        Canvas = RescaleRenderElement<FloatingSpaceRenderElement<R>>,
     }
 }
 
@@ -258,7 +268,7 @@ impl<W: LayoutElement> Workspace<W> {
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
 
-        Self {
+        let mut ws = Self {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
@@ -276,7 +286,11 @@ impl<W: LayoutElement> Workspace<W> {
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
-        }
+            canvas: WorkspaceCanvas::default(),
+        };
+        // rice: start in the configured default mode.
+        ws.apply_default_mode();
+        ws
     }
 
     pub fn new_with_config_no_outputs(
@@ -320,7 +334,7 @@ impl<W: LayoutElement> Workspace<W> {
         let shadow_config =
             compute_workspace_shadow_config(options.overview.workspace_shadow, view_size);
 
-        Self {
+        let mut ws = Self {
             scrolling,
             floating,
             floating_is_active: FloatingActive::No,
@@ -338,7 +352,11 @@ impl<W: LayoutElement> Workspace<W> {
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
-        }
+            canvas: WorkspaceCanvas::default(),
+        };
+        // rice: start in the configured default mode.
+        ws.apply_default_mode();
+        ws
     }
 
     pub fn new_no_outputs(clock: Clock, options: Rc<Options>) -> Self {
@@ -366,23 +384,30 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn advance_animations(&mut self) {
+        // rice: advance the canvas view before the tiles.
+        self.canvas_advance_animations();
         self.scrolling.advance_animations();
         self.floating.advance_animations();
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
-        self.scrolling.are_animations_ongoing() || self.floating.are_animations_ongoing()
+        self.scrolling.are_animations_ongoing()
+            || self.floating.are_animations_ongoing()
+            || self.canvas.view.is_animating() // rice
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
-        self.scrolling.are_transitions_ongoing() || self.floating.are_transitions_ongoing()
+        self.scrolling.are_transitions_ongoing()
+            || self.floating.are_transitions_ongoing()
+            || self.canvas.view.is_animating() // rice: no pointer refocus while panning
     }
 
     pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
         self.scrolling
             .update_render_elements(is_active && !self.floating_is_active.get(), layer);
 
-        let view_rect = Rectangle::from_size(self.view_size);
+        // rice: canvas mode sees a zoomed-out part of the plane.
+        let view_rect = self.floating_view_rect();
         self.floating.update_render_elements(
             is_active && self.floating_is_active.get(),
             view_rect,
@@ -415,11 +440,12 @@ impl<W: LayoutElement> Workspace<W> {
             options.clone(),
         );
 
+        // rice: canvas mode compensates frame widths for the zoom.
         self.floating.update_config(
             self.view_size,
             self.working_area,
             self.scale.fractional_scale(),
-            options.clone(),
+            self.floating_options(&options),
         );
 
         let shadow_config =
@@ -431,6 +457,9 @@ impl<W: LayoutElement> Workspace<W> {
 
         self.base_options = base_options;
         self.options = options;
+
+        // rice: re-clamp the canvas zoom to the (possibly changed) zoom steps.
+        self.canvas_update_config();
     }
 
     pub fn update_layout_config(&mut self, layout_config: Option<niri_config::LayoutPart>) {
@@ -597,11 +626,12 @@ impl<W: LayoutElement> Workspace<W> {
                 scale.fractional_scale(),
                 self.options.clone(),
             );
+            // rice: canvas mode compensates frame widths for the zoom.
             self.floating.update_config(
                 size,
                 working_area,
                 scale.fractional_scale(),
-                self.options.clone(),
+                self.floating_options(&self.options),
             );
 
             let shadow_config =
@@ -643,6 +673,9 @@ impl<W: LayoutElement> Workspace<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
     ) {
+        // rice: canvas workspaces put normal windows on the plane.
+        let (target, is_floating) = self.canvas_adjust_add_target(&mut tile, target, is_floating);
+
         self.enter_output_for_window(tile.window());
         tile.restore_to_floating = is_floating;
 
@@ -741,6 +774,11 @@ impl<W: LayoutElement> Workspace<W> {
         tile: Tile<W>,
         activate: bool,
     ) {
+        // rice: canvas workspaces have no columns to add to.
+        if self.is_canvas() {
+            return self.canvas_add_tiles(vec![tile], activate, None);
+        }
+
         self.enter_output_for_window(tile.window());
         self.scrolling
             .add_tile_to_column(col_idx, tile_idx, tile, activate);
@@ -756,6 +794,11 @@ impl<W: LayoutElement> Workspace<W> {
         activate: bool,
         anim: Option<niri_config::Animation>,
     ) {
+        // rice: columns moved onto a canvas workspace spill onto the plane.
+        if self.is_canvas() {
+            return self.canvas_add_tiles(column.into_tiles(), activate, anim);
+        }
+
         for (tile, _) in column.tiles() {
             self.enter_output_for_window(tile.window());
         }
@@ -795,6 +838,10 @@ impl<W: LayoutElement> Workspace<W> {
 
         self.update_focus_floating_tiling_after_removing(from_floating);
 
+        // rice: plane positions are meaningless on other workspaces.
+        let mut removed = removed;
+        self.canvas_on_tile_removed(&mut removed);
+
         removed
     }
 
@@ -804,7 +851,7 @@ impl<W: LayoutElement> Workspace<W> {
             return None;
         }
 
-        let column = self.scrolling.remove_active_column()?;
+        let mut column = self.scrolling.remove_active_column()?;
 
         if let Some(output) = &self.output {
             for (tile, _) in column.tiles() {
@@ -814,6 +861,9 @@ impl<W: LayoutElement> Workspace<W> {
 
         self.update_focus_floating_tiling_after_removing(from_floating);
 
+        // rice: plane positions are meaningless on other workspaces.
+        self.canvas_on_column_removed(&mut column);
+
         Some(column)
     }
 
@@ -822,6 +872,7 @@ impl<W: LayoutElement> Workspace<W> {
         default_width: Option<Option<PresetSize>>,
         is_floating: bool,
     ) -> Option<PresetSize> {
+        let is_floating = is_floating || self.is_canvas(); // rice
         match default_width {
             Some(Some(width)) => Some(width),
             Some(None) => None,
@@ -835,6 +886,7 @@ impl<W: LayoutElement> Workspace<W> {
         default_height: Option<Option<PresetSize>>,
         is_floating: bool,
     ) -> Option<PresetSize> {
+        let is_floating = is_floating || self.is_canvas(); // rice
         match default_height {
             Some(Some(height)) => Some(height),
             Some(None) => None,
@@ -852,6 +904,7 @@ impl<W: LayoutElement> Workspace<W> {
         rules: &ResolvedWindowRules,
         (min_size, max_size): (Size<i32, Logical>, Size<i32, Logical>),
     ) -> Size<i32, Logical> {
+        let is_floating = is_floating || self.is_canvas(); // rice
         let mut size = if is_floating {
             self.floating.new_window_size(width, height, rules)
         } else {
@@ -883,6 +936,7 @@ impl<W: LayoutElement> Workspace<W> {
         is_floating: bool,
         rules: &ResolvedWindowRules,
     ) {
+        let is_floating = is_floating || self.is_canvas(); // rice
         window.with_surfaces(|surface, data| {
             send_scale_transform(surface, data, self.scale, self.transform);
         });
@@ -1290,7 +1344,7 @@ impl<W: LayoutElement> Workspace<W> {
         if self.floating.has_window(window) {
             if is_fullscreen {
                 restore_to_floating = true;
-                self.toggle_window_floating(Some(window));
+                self.toggle_window_floating_impl(Some(window));
             } else {
                 // Floating windows are never fullscreen, so this is an unfullscreen request for an
                 // already unfullscreen window.
@@ -1315,7 +1369,7 @@ impl<W: LayoutElement> Workspace<W> {
                 if tile.restore_to_floating {
                     // Unfullscreen and float in one call so it has a chance to notice and request a
                     // (0, 0) size, rather than the scrolling column size.
-                    self.toggle_window_floating(Some(window));
+                    self.toggle_window_floating_impl(Some(window));
                     return;
                 }
             }
@@ -1337,7 +1391,8 @@ impl<W: LayoutElement> Workspace<W> {
             .find(|tile| tile.window().id() == window)
             .unwrap();
         if was_normal && !tile.window().pending_sizing_mode().is_normal() {
-            tile.restore_to_floating = restore_to_floating;
+            // rice: on a canvas, fullscreen/maximized windows always return to the plane.
+            tile.restore_to_floating = restore_to_floating || self.canvas.is_canvas();
         }
     }
 
@@ -1355,7 +1410,7 @@ impl<W: LayoutElement> Workspace<W> {
         if self.floating.has_window(window) {
             if maximize {
                 restore_to_floating = true;
-                self.toggle_window_floating(Some(window));
+                self.toggle_window_floating_impl(Some(window));
             } else {
                 // Floating windows are never maximized, so this is an unmaximize request for an
                 // already unmaximized window.
@@ -1375,7 +1430,7 @@ impl<W: LayoutElement> Workspace<W> {
             if tile.window().pending_sizing_mode().is_maximized() && tile.restore_to_floating {
                 // Unmaximize and float in one call so it has a chance to notice and request a
                 // (0, 0) size, rather than the scrolling column size.
-                self.toggle_window_floating(Some(window));
+                self.toggle_window_floating_impl(Some(window));
                 return;
             }
         }
@@ -1396,7 +1451,8 @@ impl<W: LayoutElement> Workspace<W> {
             .find(|tile| tile.window().id() == window)
             .unwrap();
         if was_normal && !tile.window().pending_sizing_mode().is_normal() {
-            tile.restore_to_floating = restore_to_floating;
+            // rice: on a canvas, fullscreen/maximized windows always return to the plane.
+            tile.restore_to_floating = restore_to_floating || self.canvas.is_canvas();
         }
     }
 
@@ -1416,6 +1472,14 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn toggle_window_floating(&mut self, id: Option<&W::Id>) {
+        // rice: on canvas workspaces, windows cannot leave the plane for the strip.
+        if self.canvas_blocks_floating_toggle(id) {
+            return;
+        }
+        self.toggle_window_floating_impl(id);
+    }
+
+    fn toggle_window_floating_impl(&mut self, id: Option<&W::Id>) {
         let active_id = self.active_window().map(|win| win.id().clone());
         let target_is_active = id.is_none_or(|id| Some(id) == active_id.as_ref());
         let Some(id) = id.cloned().or(active_id) else {
@@ -1635,11 +1699,20 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scrolling = self.scrolling.tiles_with_ipc_layouts();
-        let floating = self.floating.tiles_with_ipc_layouts();
+        // rice: report canvas tile positions in real view coordinates.
+        let zoom = self.canvas_zoom();
+        let floating = self
+            .floating
+            .tiles_with_ipc_layouts()
+            .map(move |(tile, layout)| (tile, canvas_ext::scale_ipc_layout(layout, zoom)));
         floating.chain(scrolling)
     }
 
     pub fn active_window_visual_rectangle(&self) -> Option<Rectangle<f64, Logical>> {
+        // rice: canvas rects go through the canvas transform.
+        if self.is_canvas() && self.floating_is_active.get() {
+            return self.canvas_active_window_visual_rectangle();
+        }
         if self.floating_is_active.get() {
             self.floating.active_window_visual_rectangle()
         } else {
@@ -1686,6 +1759,11 @@ impl<W: LayoutElement> Workspace<W> {
             return;
         }
 
+        // rice: canvas windows render scaled by the canvas zoom.
+        if self.is_canvas() {
+            return self.render_canvas(ctx, xray_pos, focus_ring, layer, push);
+        }
+
         let view_rect = Rectangle::from_size(self.view_size);
         let floating_focus_ring = focus_ring && self.floating_is_active();
         self.floating.render(
@@ -1720,6 +1798,11 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn is_floating_visible(&self) -> bool {
+        // rice: a focused fullscreen or maximized window covers the whole canvas.
+        if self.is_canvas() && self.floating_is_active == FloatingActive::No {
+            return self.scrolling.is_empty();
+        }
+
         // If the focus is on a fullscreen scrolling window, hide the floating windows.
         matches!(
             self.floating_is_active,
@@ -1794,6 +1877,11 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn window_under(&self, pos: Point<f64, Logical>) -> Option<(&W, HitType)> {
+        // rice: canvas windows are hit-tested through the canvas transform.
+        if self.is_canvas() {
+            return self.canvas_window_under(pos);
+        }
+
         // This logic is consistent with tiles_with_render_positions().
         if self.is_floating_visible() {
             if let Some(rv) = self
@@ -1809,6 +1897,11 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn resize_edges_under(&self, pos: Point<f64, Logical>) -> Option<ResizeEdge> {
+        // rice: no interactive resize through a zoomed canvas (yet).
+        if self.canvas_is_zoomed() {
+            return None;
+        }
+
         self.tiles_with_render_positions()
             .find_map(|(tile, tile_pos, visible)| {
                 // This logic should be consistent with window_under() in when it returns Some vs.
@@ -1851,6 +1944,9 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub fn refresh(&mut self, is_active: bool, is_focused: bool) {
+        // rice: windows that stopped being fullscreen/maximized go back onto the canvas.
+        self.canvas_return_restored_windows();
+
         self.scrolling
             .refresh(is_active && !self.floating_is_active.get(), is_focused);
         self.floating
@@ -1898,6 +1994,10 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     pub(super) fn scrolling_insert_position(&self, pos: Point<f64, Logical>) -> InsertPosition {
+        // rice: everything dropped onto a canvas lands on the plane.
+        if self.is_canvas() {
+            return InsertPosition::Floating;
+        }
         self.scrolling.insert_position(pos)
     }
 
@@ -2006,6 +2106,8 @@ impl<W: LayoutElement> Workspace<W> {
         &self,
         logical_pos: Point<f64, Logical>,
     ) -> Point<f64, SizeFrac> {
+        // rice: view -> unscaled view for canvas drops.
+        let logical_pos = logical_pos.downscale(self.canvas_zoom());
         self.floating.logical_to_size_frac(logical_pos)
     }
 
@@ -2063,8 +2165,12 @@ impl<W: LayoutElement> Workspace<W> {
         assert_eq!(self.view_size, self.floating.view_size());
         assert_eq!(self.working_area, self.floating.working_area());
         assert_eq!(&self.clock, self.floating.clock());
-        assert!(Rc::ptr_eq(&self.options, self.floating.options()));
+        // rice: canvas mode may hand the floating space frame-width-compensated options.
+        if !self.is_canvas() {
+            assert!(Rc::ptr_eq(&self.options, self.floating.options()));
+        }
         self.floating.verify_invariants();
+        self.canvas_verify_invariants();
 
         if self.floating.is_empty() {
             assert!(

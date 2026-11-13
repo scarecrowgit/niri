@@ -28,6 +28,10 @@ use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
 
+// rice: strip arrangement snapshot/restore for canvas mode.
+mod strip_snapshot;
+pub use strip_snapshot::{SavedColumn, StripArrangement};
+
 /// Amount of touchpad movement to scroll the view for the width of one working area.
 const VIEW_GESTURE_WORKING_AREA_MOVEMENT: f64 = 1200.;
 

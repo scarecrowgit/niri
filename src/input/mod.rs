@@ -64,6 +64,7 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 use crate::window::mapped::MappedId;
 
 pub mod backend_ext;
+pub mod canvas_actions; // rice
 pub mod click_grab;
 pub mod move_grab;
 pub mod pick_color_grab;
@@ -924,6 +925,9 @@ impl State {
         if let Some(touch) = self.niri.seat.get_touch() {
             touch.cancel(self);
         }
+
+        // rice: remember the focus for canvas reveal / edge-push.
+        let canvas_hook = canvas_actions::CanvasActionHook::new(&action, self);
 
         match action {
             Action::Quit(skip_confirmation) => {
@@ -2778,7 +2782,29 @@ impl State {
                     self.niri.test_action_count += 1;
                 }
             }
+            // rice: infinite canvas actions.
+            action @ (Action::ToggleWorkspaceMode
+            | Action::SetWorkspaceMode(_)
+            | Action::CanvasPanLeft
+            | Action::CanvasPanRight
+            | Action::CanvasPanUp
+            | Action::CanvasPanDown
+            | Action::CanvasPanTo(..)
+            | Action::CanvasZoomIn
+            | Action::CanvasZoomOut
+            | Action::CanvasSetZoom(_)
+            | Action::CanvasFit
+            | Action::CanvasHome
+            | Action::CanvasFlyToWindow
+            | Action::CanvasFlyToWindowById(_)
+            | Action::ToggleWindowPinned
+            | Action::ToggleWindowPinnedById(_)) => {
+                self.do_canvas_action(action);
+            }
         }
+
+        // rice: canvas reveal / edge-push after keyboard focus and move actions.
+        canvas_hook.finish(self);
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {

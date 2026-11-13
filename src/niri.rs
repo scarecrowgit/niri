@@ -1174,6 +1174,8 @@ impl State {
         let active_output = self.niri.layout.active_output().cloned();
 
         self.niri.layout.activate_window(window);
+        // rice: keyboard/IPC focus recentres a canvas view on the window.
+        self.niri.layout.canvas_reveal_window(window);
 
         let new_active = self.niri.layout.active_output().cloned();
         if new_active != active_output {

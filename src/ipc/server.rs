@@ -618,10 +618,12 @@ impl State {
             };
 
             // Check for any changes that we can't signal as individual events.
+            // rice: including the workspace mode.
             let output_name = mon.map(|mon| mon.output_name());
             if ipc_ws.idx != u8::try_from(ws_idx + 1).unwrap_or(u8::MAX)
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
+                || ipc_ws.mode != ws.mode()
             {
                 need_workspaces_changed = true;
                 break;
@@ -676,6 +678,7 @@ impl State {
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,
                         active_window_id: ws.active_window().map(|win| win.id().get()),
+                        mode: ws.mode(), // rice
                     }
                 })
                 .collect();

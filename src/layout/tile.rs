@@ -75,6 +75,10 @@ pub struct Tile<W: LayoutElement> {
     /// the window starts out in the tiling layout.
     pub(super) floating_pos: Option<Point<f64, SizeFrac>>,
 
+    /// rice: exact canvas plane position to restore when the tile re-enters the canvas of the
+    /// workspace it is on (e.g. after fullscreen). Cleared when the tile leaves its workspace.
+    pub(super) canvas_plane_pos: Option<Point<f64, Logical>>,
+
     /// Currently selected preset width index when this tile is floating.
     pub(super) floating_preset_width_idx: Option<usize>,
 
@@ -203,6 +207,7 @@ impl<W: LayoutElement> Tile<W> {
             restore_to_floating: false,
             floating_window_size: None,
             floating_pos: None,
+            canvas_plane_pos: None,
             floating_preset_width_idx: None,
             floating_preset_height_idx: None,
             open_animation: None,
