@@ -374,8 +374,17 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 return Ok(());
             }
 
-            // ashd: hidden workspaces (idx 0) go after the visible ones.
-            response.sort_by_key(|ws| (ws.is_hidden, ws.idx));
+            // ashd: hidden workspaces (idx 0) go after the visible ones; fullscreen workspaces
+            // (idx 0) right after their origin.
+            let origin_idx: std::collections::HashMap<u64, u8> =
+                response.iter().map(|ws| (ws.id, ws.idx)).collect();
+            response.sort_by_key(|ws| {
+                let idx = ws
+                    .fullscreen_origin_id
+                    .and_then(|id| origin_idx.get(&id).copied())
+                    .unwrap_or(ws.idx);
+                (ws.is_hidden, idx, ws.fullscreen_origin_id.is_some())
+            });
             response.sort_by(|a, b| a.output.cmp(&b.output));
 
             let mut current_output = if let Some(output) = response[0].output.as_deref() {
@@ -398,7 +407,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
 
                 let is_active = if ws.is_active { " * " } else { "   " };
                 // ashd: hidden workspaces have no index.
-                let idx = if ws.is_hidden {
+                let idx = if ws.is_hidden || ws.fullscreen_origin_id.is_some() {
                     String::from("-")
                 } else {
                     ws.idx.to_string()
@@ -415,7 +424,12 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                     ""
                 };
                 let hidden = if ws.is_hidden { " (hidden)" } else { "" };
-                println!("{is_active}{idx}{name}{mode}{hidden}");
+                let fullscreen = match ws.fullscreen_window_id {
+                    Some(id) => format!(" (fullscreen: window {id})"),
+                    None if ws.fullscreen_origin_id.is_some() => String::from(" (fullscreen)"),
+                    None => String::new(),
+                };
+                println!("{is_active}{idx}{name}{mode}{hidden}{fullscreen}");
             }
         }
         Msg::KeyboardLayouts => {

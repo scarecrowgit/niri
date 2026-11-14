@@ -853,6 +853,8 @@ impl State {
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
                 || ipc_ws.is_hidden != ws.is_hidden()
+                || ipc_ws.fullscreen_window_id != fullscreen_window_id(ws)
+                || ipc_ws.fullscreen_origin_id != fullscreen_origin_id(ws)
             {
                 need_workspaces_changed = true;
                 break;
@@ -913,8 +915,10 @@ impl State {
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,
                         active_window_id: ws.active_window().map(|win| win.id().get()),
-                        mode: ws.mode(),           // ashd
-                        is_hidden: ws.is_hidden(), // ashd
+                        mode: ws.mode(),                                // ashd
+                        is_hidden: ws.is_hidden(),                      // ashd
+                        fullscreen_window_id: fullscreen_window_id(ws), // ashd
+                        fullscreen_origin_id: fullscreen_origin_id(ws), // ashd
                     }
                 })
                 .collect();
@@ -1278,4 +1282,17 @@ impl State {
         state.apply(event.clone());
         server.send_event(event);
     }
+}
+
+/// ashd: `Workspace::fullscreen_window_id`.
+fn fullscreen_window_id(ws: &LayoutWorkspace<Mapped>) -> Option<u64> {
+    let window = ws.fullscreen_slot()?.window.as_ref()?;
+    ws.windows()
+        .find(|mapped| &mapped.window == window)
+        .map(|mapped| mapped.id().get())
+}
+
+/// ashd: `Workspace::fullscreen_origin_id`.
+fn fullscreen_origin_id(ws: &LayoutWorkspace<Mapped>) -> Option<u64> {
+    ws.fullscreen_slot().map(|slot| slot.origin.get())
 }

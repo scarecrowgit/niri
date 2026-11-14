@@ -18,6 +18,7 @@ mod animations;
 mod canvas; // ashd
 mod decorations; // ashd
 mod fullscreen;
+mod fullscreen_ws; // ashd
 mod scratch; // ashd
 mod work_area; // ashd
 mod ws_by_index; // ashd
@@ -2127,6 +2128,14 @@ fn operations_dont_panic() {
             }),
         },
         Op::WsIndex(WsIndexOp::Focus(4)),
+        // ashd: fullscreen-workspaces.
+        Op::UpdateConfig {
+            layout_config: Box::new(niri_config::LayoutPart {
+                fullscreen_workspaces: Some(Flag(true)),
+                ..Default::default()
+            }),
+        },
+        Op::Refresh { is_active: true },
     ];
 
     for third in &every_op {
@@ -2325,6 +2334,14 @@ fn operations_from_starting_state_dont_panic() {
             }),
         },
         Op::WsIndex(WsIndexOp::Focus(4)),
+        // ashd: fullscreen-workspaces.
+        Op::UpdateConfig {
+            layout_config: Box::new(niri_config::LayoutPart {
+                fullscreen_workspaces: Some(Flag(true)),
+                ..Default::default()
+            }),
+        },
+        Op::Refresh { is_active: true },
     ];
 
     for third in &every_op {
@@ -4328,6 +4345,7 @@ prop_compose! {
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
         create_workspaces_by_index in prop::option::of(any::<bool>().prop_map(Flag)), // ashd
+        fullscreen_workspaces in prop::option::of(any::<bool>().prop_map(Flag)), // ashd
         default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
         title_bar in prop::option::of(arbitrary_title_bar()), // ashd
         work_area in prop::option::of(arbitrary_work_area()), // ashd
@@ -4342,6 +4360,7 @@ prop_compose! {
             always_center_single_column,
             empty_workspace_above_first,
             create_workspaces_by_index,
+            fullscreen_workspaces,
             focus_ring,
             border,
             shadow,

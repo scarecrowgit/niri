@@ -21,6 +21,7 @@ use smithay::wayland::shell::xdg::SurfaceCachedState;
 use super::canvas::WorkspaceCanvas;
 use super::canvas_grid::CanvasDecorRenderElement; // ashd
 use super::floating::{FloatingSpace, FloatingSpaceRenderElement};
+use super::fullscreen_ws::FullscreenSlot; // ashd
 use super::scrolling::{
     Column, ColumnWidth, ScrollDirection, ScrollingSpace, ScrollingSpaceRenderElement,
 };
@@ -50,6 +51,8 @@ use crate::window::ResolvedWindowRules;
 mod canvas_ext;
 // ashd: hidden (scratchpad) workspaces.
 mod scratch_ext;
+// ashd: workspaces created for fullscreen windows.
+mod fullscreen_ext;
 // ashd: canvas plane grid and regions.
 mod canvas_decor;
 // ashd: working area outline and clip.
@@ -130,6 +133,9 @@ pub struct Workspace<W: LayoutElement> {
 
     /// ashd: hidden (scratchpad) workspace, from the config entry.
     hidden: bool,
+
+    /// ashd: set on a workspace created for one fullscreen window (`fullscreen-workspaces`).
+    pub(super) fullscreen_slot: Option<FullscreenSlot<W::Id>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -300,6 +306,7 @@ impl<W: LayoutElement> Workspace<W> {
             base_options,
             options,
             hidden: config.as_ref().is_some_and(|c| c.hidden), // ashd
+            fullscreen_slot: None,                             // ashd
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
@@ -367,6 +374,7 @@ impl<W: LayoutElement> Workspace<W> {
             base_options,
             options,
             hidden: config.as_ref().is_some_and(|c| c.hidden), // ashd
+            fullscreen_slot: None,                             // ashd
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),

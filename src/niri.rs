@@ -456,6 +456,8 @@ pub struct Niri {
     pub global_shortcuts_portal_binds: GlobalShortcutsPortalBinds,
 
     pub window_mru_ui: WindowMruUi,
+    /// ashd: edge panels revealed over fullscreen windows.
+    pub edge_reveal: crate::edge_reveal::EdgeRevealState,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -949,6 +951,7 @@ impl State {
         self.niri.global_space.refresh();
         self.niri.refresh_idle_inhibit();
         self.refresh_pointer_contents();
+        self.refresh_edge_reveal(); // ashd
         foreign_toplevel::refresh(self);
         ext_workspace::refresh(self);
         self.refresh_image_copy_capture();
@@ -3078,6 +3081,7 @@ impl Niri {
             global_shortcuts_portal_binds: global_shortcuts,
 
             window_mru_ui,
+            edge_reveal: Default::default(), // ashd
             pending_mru_commit: None,
 
             pick_window: None,
@@ -3604,6 +3608,13 @@ impl Niri {
                         layers.layer_geometry(layer).unwrap().loc.to_f64();
                     layer_pos_within_output += mapped.bob_offset();
 
+                    // ashd: edge panels sliding in and out; over a fullscreen window only the
+                    // revealed ones count.
+                    let placement = self.edge_reveal.placement(layer);
+                    if let Some(placement) = placement {
+                        layer_pos_within_output += placement.offset;
+                    }
+
                     let surface_type = if popup {
                         WindowSurfaceType::POPUP
                     } else {
@@ -3623,7 +3634,17 @@ impl Niri {
 
         let mon = self.layout.monitor_for_output(output).unwrap();
         if mon.render_above_top_layer() {
-            return false;
+            // ashd: edge panels revealed over the fullscreen window.
+            let revealed = layers.layers_on(Layer::Top).any(|layer| {
+                let Some(placement) = self.edge_reveal.placement(layer).filter(|p| p.above) else {
+                    return false;
+                };
+                let loc = layers.layer_geometry(layer).unwrap().loc.to_f64() + placement.offset;
+                layer
+                    .surface_under(pos_within_output - loc, WindowSurfaceType::ALL)
+                    .is_some()
+            });
+            return revealed;
         }
 
         if self.is_inside_hot_corner(output, pos_within_output) {
@@ -3818,7 +3839,8 @@ impl Niri {
         }
 
         let layers = layer_map_for_output(output);
-        let layer_surface_under = |layer, popup| {
+        // ashd: `revealed_only` picks the edge panels revealed over a fullscreen window.
+        let layer_surface_under_impl = |layer, popup, revealed_only: bool| {
             layers
                 .layers_on(layer)
                 .rev()
@@ -3831,6 +3853,15 @@ impl Niri {
                     let mut layer_pos_within_output =
                         layers.layer_geometry(layer_surface).unwrap().loc.to_f64();
                     layer_pos_within_output += mapped.bob_offset();
+
+                    // ashd: edge panels sliding in and out.
+                    let placement = self.edge_reveal.placement(layer_surface);
+                    if revealed_only && !placement.is_some_and(|p| p.above) {
+                        return None;
+                    }
+                    if let Some(placement) = placement {
+                        layer_pos_within_output += placement.offset;
+                    }
 
                     // Background and bottom layers move together with the workspaces.
                     if matches!(layer, Layer::Background | Layer::Bottom) {
@@ -3858,6 +3889,7 @@ impl Niri {
                 })
                 .map(|(s, l)| (Some(s), (None, Some(l.clone()))))
         };
+        let layer_surface_under = |layer, popup| layer_surface_under_impl(layer, popup, false);
 
         let layer_toplevel_under = |layer| layer_surface_under(layer, false);
         let layer_popup_under = |layer| layer_surface_under(layer, true);
@@ -3906,6 +3938,11 @@ impl Niri {
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
+            // ashd: edge panels revealed over the fullscreen window.
+            under = under
+                .or_else(|| layer_surface_under_impl(Layer::Top, true, true))
+                .or_else(|| layer_surface_under_impl(Layer::Top, false, true));
+
             under = under
                 .or_else(interactive_moved_window_under)
                 .or_else(window_under)
@@ -4658,6 +4695,7 @@ impl Niri {
     }
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
+        self.update_edge_reveal_placements(output); // ashd
         self.update_xray_render_elements(output);
         self.layout.update_render_elements(output);
 
@@ -4949,6 +4987,9 @@ impl Niri {
         // When rendering above the top layer, we put the regular monitor elements first.
         // Otherwise, we will render all layer-shell pop-ups and the top layer on top.
         if mon.render_above_top_layer() {
+            // ashd: edge panels revealed over the fullscreen window.
+            self.render_revealed_edge_panels(ctx.r(), &layer_map, &mut |elem| push(elem.into()));
+
             self.layout
                 .render_interactive_move_for_output(ctx.r(), output, &mut |elem| push(elem.into()));
 
@@ -5139,9 +5180,37 @@ impl Niri {
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
     ) {
         for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
-            let loc = geo.loc.to_f64();
+            let mut loc = geo.loc.to_f64();
+            // ashd: edge panels sliding in and out.
+            if let Some(placement) = self.edge_reveal.placement(mapped.surface()) {
+                loc += placement.offset;
+            }
             let xray_pos = xray_pos.offset(loc);
             mapped.render_normal(ctx.r(), ns, loc, xray_pos, push);
+        }
+    }
+
+    /// ashd: the top-layer edge panels drawn above a fullscreen window (`edge-reveal`).
+    fn render_revealed_edge_panels<R: NiriRenderer>(
+        &self,
+        mut ctx: RenderCtx<R>,
+        layer_map: &LayerMap,
+        push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
+    ) {
+        let revealed = || {
+            self.layers_in_render_order(layer_map, Layer::Top, false)
+                .filter_map(|(mapped, geo)| {
+                    let placement = self.edge_reveal.placement(mapped.surface())?;
+                    placement
+                        .above
+                        .then(|| (mapped, geo.loc.to_f64() + placement.offset))
+                })
+        };
+        for (mapped, loc) in revealed() {
+            mapped.render_popups(ctx.r(), None, loc, XrayPos::default().offset(loc), push);
+        }
+        for (mapped, loc) in revealed() {
+            mapped.render_normal(ctx.r(), None, loc, XrayPos::default().offset(loc), push);
         }
     }
 
@@ -5157,7 +5226,11 @@ impl Niri {
         push: &mut dyn FnMut(LayerSurfaceRenderElement<R>),
     ) {
         for (mapped, geo) in self.layers_in_render_order(layer_map, layer, for_backdrop) {
-            let loc = geo.loc.to_f64();
+            let mut loc = geo.loc.to_f64();
+            // ashd: edge panels sliding in and out.
+            if let Some(placement) = self.edge_reveal.placement(mapped.surface()) {
+                loc += placement.offset;
+            }
             let xray_pos = xray_pos.offset(loc);
             mapped.render_popups(ctx.r(), ns, loc, xray_pos, push);
         }
@@ -5182,8 +5255,10 @@ impl Niri {
 
         let mut res = RenderResult::Skipped;
         if self.monitors_active {
+            let edge_reveal_animating = self.edge_reveal_animating(output); // ashd
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
+            state.unfinished_animations_remain |= edge_reveal_animating; // ashd
             state.unfinished_animations_remain |=
                 self.config_error_notification.are_animations_ongoing();
             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();

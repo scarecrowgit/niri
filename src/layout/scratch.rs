@@ -66,14 +66,15 @@ pub struct HiddenWindow<Id> {
 /// Visual index (0-based, counting only visible workspaces) of the workspace at real index `idx`
 /// in `workspaces`, or `None` if it is hidden.
 pub fn visual_ws_idx<W: LayoutElement>(workspaces: &[Workspace<W>], idx: usize) -> Option<usize> {
+    // ashd: fullscreen workspaces don't count either (`Workspace::is_numbered`).
     let ws = workspaces.get(idx)?;
-    if ws.is_hidden() {
+    if !ws.is_numbered() {
         return None;
     }
     Some(
         workspaces[..idx]
             .iter()
-            .filter(|ws| !ws.is_hidden())
+            .filter(|ws| ws.is_numbered())
             .count(),
     )
 }
@@ -86,7 +87,7 @@ pub fn visual_ws_idx<W: LayoutElement>(workspaces: &[Workspace<W>], idx: usize) 
 pub fn real_ws_idx<W: LayoutElement>(workspaces: &[Workspace<W>], visual_idx: usize) -> usize {
     let mut visible = 0;
     for (idx, ws) in workspaces.iter().enumerate() {
-        if ws.is_hidden() {
+        if !ws.is_numbered() {
             continue;
         }
         if visible == visual_idx {

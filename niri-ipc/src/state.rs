@@ -462,6 +462,8 @@ mod tests {
             active_window_id: None,
             mode,
             is_hidden: false,
+            fullscreen_window_id: None,
+            fullscreen_origin_id: None,
         }
     }
 

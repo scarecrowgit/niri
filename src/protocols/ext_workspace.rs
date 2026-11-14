@@ -99,8 +99,8 @@ pub fn refresh(state: &mut State) {
     // Remove workspaces that no longer exist (sending workspace_leave to workspace groups).
     let mut seen_workspaces = HashMap::new();
     for (mon, _, ws) in state.niri.layout.workspaces() {
-        // ashd: hidden (scratchpad) workspaces are not announced.
-        if ws.is_hidden() {
+        // ashd: hidden (scratchpad) and fullscreen workspaces are not announced.
+        if !ws.is_numbered() {
             continue;
         }
         let output = mon.map(|mon| mon.output());
@@ -146,8 +146,8 @@ pub fn refresh(state: &mut State) {
     // Update existing workspaces and create new ones.
     for (mon, ws_idx, ws) in state.niri.layout.workspaces() {
         // ashd: hidden workspaces are skipped; coordinates and default names use the visual
-        // index (the one `focus-workspace N` takes).
-        if ws.is_hidden() {
+        // index (the one `focus-workspace N` takes). Fullscreen workspaces have no number.
+        if !ws.is_numbered() {
             continue;
         }
         let visual_idx = usize::from(state.niri.layout.ipc_workspace_idx(mon, ws_idx)).max(1) - 1;

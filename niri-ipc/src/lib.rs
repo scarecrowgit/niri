@@ -1749,8 +1749,8 @@ pub struct Workspace {
     /// If you need a unique workspace id that doesn't change, see [`Self::id`].
     ///
     /// ashd: the index counts only the visible workspaces of the monitor (1…n). Hidden
-    /// (scratchpad) workspaces, see [`Self::is_hidden`], have `idx` 0 and can only be referenced
-    /// by name or id.
+    /// (scratchpad) workspaces, see [`Self::is_hidden`], and fullscreen workspaces, see
+    /// [`Self::fullscreen_origin_id`], have `idx` 0 and can only be referenced by name or id.
     pub idx: u8,
     /// Optional name of the workspace.
     pub name: Option<String>,
@@ -1782,6 +1782,19 @@ pub struct Workspace {
     /// overview; their windows are the scratchpad.
     #[serde(default)]
     pub is_hidden: bool,
+    /// Id of the fullscreen window this workspace was created for (ashd fork,
+    /// `fullscreen-workspaces`).
+    ///
+    /// Such a workspace holds one fullscreen window and sits right after its origin workspace
+    /// ([`Self::fullscreen_origin_id`]); it has `idx` 0 (no number) but is visible and reachable
+    /// with workspace up/down. `None` for ordinary workspaces, and for a fullscreen workspace
+    /// whose window has just left it (it is removed right after the switch away from it).
+    #[serde(default)]
+    pub fullscreen_window_id: Option<u64>,
+    /// Id of the workspace the fullscreen window came from and returns to (ashd fork); set for
+    /// every fullscreen workspace, `None` for ordinary ones.
+    #[serde(default)]
+    pub fullscreen_origin_id: Option<u64>,
 }
 
 /// Configured keyboard layouts.

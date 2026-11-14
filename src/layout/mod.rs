@@ -82,6 +82,7 @@ pub mod canvas_grid; // ashd
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
+pub mod fullscreen_ws;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
@@ -93,7 +94,7 @@ pub mod tile;
 pub mod title_bar; // ashd
 pub mod work_area; // ashd
 pub mod workspace;
-mod ws_by_index; // ashd
+mod ws_by_index; // ashd // ashd
 
 #[cfg(test)]
 mod tests;
@@ -1094,6 +1095,22 @@ impl<W: LayoutElement> Layout<W> {
                 };
                 let mon = &mut monitors[mon_idx];
 
+                // ashd: windows opened over a fullscreen workspace open on its origin, focused.
+                let (target, activate) = match (target, mon.fullscreen_redirect_new_window()) {
+                    (MonitorAddWindowTarget::Auto, Some(id)) => (
+                        MonitorAddWindowTarget::Workspace {
+                            id,
+                            column_idx: None,
+                        },
+                        if matches!(activate, ActivateWindow::No) {
+                            ActivateWindow::No
+                        } else {
+                            ActivateWindow::Yes
+                        },
+                    ),
+                    (target, _) => (target, activate),
+                };
+
                 let (ws_idx, _) = mon.resolve_add_window_target(target);
                 let ws = &mon.workspaces[ws_idx];
                 let scrolling_width = ws.resolve_scrolling_width(&window, width);
@@ -1263,6 +1280,8 @@ impl<W: LayoutElement> Layout<W> {
                                 && idx != mon.active_workspace_idx
                                 && idx != mon.workspaces.len() - 1
                                 && mon.workspace_switch.is_none()
+                                && !mon.is_fullscreen_origin(idx)
+                            // ashd
                             {
                                 mon.workspaces.remove(idx);
 
@@ -3648,9 +3667,10 @@ impl<W: LayoutElement> Layout<W> {
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.set_fullscreen(id, is_fullscreen);
-                return;
+                break;
             }
         }
+        self.sync_fullscreen_workspaces(); // ashd
     }
 
     pub fn toggle_fullscreen(&mut self, id: &W::Id) {
@@ -3663,9 +3683,10 @@ impl<W: LayoutElement> Layout<W> {
         for ws in self.workspaces_mut() {
             if ws.has_window(id) {
                 ws.toggle_fullscreen(id);
-                return;
+                break;
             }
         }
+        self.sync_fullscreen_workspaces(); // ashd
     }
 
     pub fn set_windowed_fullscreen(&mut self, id: &W::Id, fullscreen: bool) {
@@ -3691,6 +3712,7 @@ impl<W: LayoutElement> Layout<W> {
                 window.request_windowed_fullscreen(fullscreen);
             }
         });
+        self.sync_fullscreen_workspaces(); // ashd
     }
 
     pub fn toggle_windowed_fullscreen(&mut self, id: &W::Id) {
@@ -3711,6 +3733,7 @@ impl<W: LayoutElement> Layout<W> {
                 window.request_windowed_fullscreen(!window.is_pending_windowed_fullscreen());
             }
         });
+        self.sync_fullscreen_workspaces(); // ashd
     }
 
     pub fn set_maximized(&mut self, id: &W::Id, maximize: bool) {
@@ -5029,6 +5052,9 @@ impl<W: LayoutElement> Layout<W> {
         let _span = tracy_client::span!("Layout::refresh");
 
         self.is_active = is_active;
+
+        // ashd: fullscreen windows get (and leave) workspaces of their own.
+        self.sync_fullscreen_workspaces();
 
         let mut ongoing_scrolling_dnd = self.dnd.is_some().then_some(true);
 

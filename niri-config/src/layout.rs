@@ -37,6 +37,8 @@ pub struct Layout {
     /// ashd: index references past the last workspace create workspaces up to that index, and
     /// empty workspaces below a used one are kept (only trailing empty ones are removed).
     pub create_workspaces_by_index: bool,
+    /// ashd: a fullscreen window gets a workspace of its own, right after the one it came from.
+    pub fullscreen_workspaces: bool,
 }
 
 impl Default for Layout {
@@ -71,6 +73,7 @@ impl Default for Layout {
             title_bar: TitleBar::default(),
             work_area: WorkArea::default(),
             create_workspaces_by_index: false,
+            fullscreen_workspaces: false,
         }
     }
 }
@@ -93,6 +96,8 @@ impl MergeWith<LayoutPart> for Layout {
             struts,    // ashd: per side
             // ashd: numbered workspaces created on demand.
             create_workspaces_by_index,
+            // ashd: a workspace per fullscreen window.
+            fullscreen_workspaces,
         );
 
         merge_clone!(
@@ -169,6 +174,9 @@ pub struct LayoutPart {
     // ashd: numbered workspaces created on demand.
     #[knuffel(child)]
     pub create_workspaces_by_index: Option<Flag>,
+    // ashd: a workspace per fullscreen window.
+    #[knuffel(child)]
+    pub fullscreen_workspaces: Option<Flag>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]

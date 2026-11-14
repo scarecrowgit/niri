@@ -34,6 +34,7 @@ pub mod binds;
 pub mod canvas;
 pub mod debug;
 pub mod decorations; // ashd
+pub mod edge_reveal; // ashd
 pub mod error;
 pub mod gestures;
 pub mod input;
@@ -99,6 +100,8 @@ pub struct Config {
     pub debug: Debug,
     pub workspaces: Vec<Workspace>,
     pub recent_windows: RecentWindows,
+    // ashd: edge layer surfaces revealed over fullscreen windows.
+    pub edge_reveal: crate::edge_reveal::EdgeReveal,
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +217,7 @@ where
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
+                "edge-reveal" => m_merge!(edge_reveal), // ashd
 
                 // Multipart sections.
                 "output" => {
@@ -2090,6 +2094,7 @@ mod tests {
                     clip: false,
                 },
                 create_workspaces_by_index: false,
+                fullscreen_workspaces: false,
             },
             prefer_no_csd: true,
             cursor: Cursor {
@@ -2285,6 +2290,18 @@ mod tests {
                             SpringParams {
                                 damping_ratio: 1.0,
                                 stiffness: 1200,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
+                edge_reveal: EdgeRevealAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 800,
                                 epsilon: 0.0001,
                             },
                         ),
@@ -3147,6 +3164,12 @@ mod tests {
                         hotkey_overlay_title: None,
                     },
                 ],
+            },
+            edge_reveal: EdgeReveal {
+                on: false,
+                dwell_ms: 150,
+                hide_delay_ms: 400,
+                namespace: None,
             },
         }
         "#);

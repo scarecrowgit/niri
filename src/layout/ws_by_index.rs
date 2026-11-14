@@ -53,7 +53,9 @@ impl<W: LayoutElement> Monitor<W> {
             .skip(range_start)
             .rev()
             .find(|(idx, ws)| {
-                *idx == self.active_workspace_idx || (!ws.is_hidden() && ws.has_windows_or_name())
+                *idx == self.active_workspace_idx
+                    || (!ws.is_hidden() && ws.has_windows_or_name())
+                    || self.is_fullscreen_origin(*idx)
             })
             .map(|(idx, _)| idx);
         last_used.map_or(range_start, |idx| idx + 1)

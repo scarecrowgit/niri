@@ -10,6 +10,7 @@ use smithay::backend::renderer::element::utils::{
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use super::fullscreen_ws::FullscreenReturn; // ashd
 use super::insert_hint_element::{InsertHintElement, InsertHintRenderElement};
 use super::scrolling::{Column, ColumnWidth};
 use super::tile::Tile;
@@ -662,6 +663,9 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn clean_up_workspaces(&mut self) {
         assert!(self.workspace_switch.is_none());
 
+        // ashd: workspaces whose fullscreen window has left go first.
+        self.remove_retired_fullscreen_workspaces();
+
         // ashd: with create-workspaces-by-index only trailing empty workspaces go.
         if self.creates_workspaces_by_index() {
             self.clean_up_workspaces_by_index();
@@ -678,7 +682,8 @@ impl<W: LayoutElement> Monitor<W> {
                 continue;
             }
 
-            if !self.workspaces[idx].has_windows_or_name() {
+            // ashd: the origin of a fullscreen workspace stays (the window returns there).
+            if !self.workspaces[idx].has_windows_or_name() && !self.is_fullscreen_origin(idx) {
                 self.workspaces.remove(idx);
                 if self.active_workspace_idx > idx {
                     self.active_workspace_idx -= 1;
@@ -849,6 +854,18 @@ impl<W: LayoutElement> Monitor<W> {
         idx: usize,
         activate: ActivateWindow,
     ) {
+        self.move_to_workspace_placed(window, idx, activate, None); // ashd
+    }
+
+    /// ashd: `move_to_workspace()` that puts the window where `place` says (a window coming back
+    /// from its fullscreen workspace).
+    pub(super) fn move_to_workspace_placed(
+        &mut self,
+        window: Option<&W::Id>,
+        idx: usize,
+        activate: ActivateWindow,
+        place: Option<&FullscreenReturn>,
+    ) {
         let source_workspace_idx = if let Some(window) = window {
             self.workspaces
                 .iter()
@@ -896,11 +913,15 @@ impl<W: LayoutElement> Monitor<W> {
             self.options.animations.window_movement.0
         };
 
+        // ashd: a window back from fullscreen returns to its column position.
+        let column_idx = place
+            .filter(|_| !removed.is_floating)
+            .and_then(|place| self.workspaces[new_idx].fullscreen_return_column(place));
         self.add_tile(
             removed.tile,
             MonitorAddWindowTarget::Workspace {
                 id: new_id,
-                column_idx: None,
+                column_idx,
             },
             if activate {
                 ActivateWindow::Yes
@@ -919,6 +940,10 @@ impl<W: LayoutElement> Monitor<W> {
         }
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
+        // ashd: or to its plane position.
+        if let Some(FullscreenReturn::Plane(Some(plane))) = place {
+            self.workspaces[new_idx].fullscreen_restore_plane(&window, *plane);
+        }
 
         // Animate vertical movement between workspaces.
         //
@@ -2373,7 +2398,8 @@ impl<W: LayoutElement> Monitor<W> {
             "monitor must have at least one workspace"
         );
         assert!(self.active_workspace_idx < self.workspaces.len());
-        // ashd: hidden workspaces.
+        self.verify_fullscreen_invariants(); // ashd
+                                             // ashd: hidden workspaces.
         assert!(
             !self.workspaces[self.active_workspace_idx].is_hidden(),
             "a hidden workspace can't be active"
@@ -2448,7 +2474,8 @@ impl<W: LayoutElement> Monitor<W> {
                 // skip last
                 .skip(1)
             {
-                if idx != self.active_workspace_idx {
+                // ashd: so does the origin of a fullscreen workspace.
+                if idx != self.active_workspace_idx && !self.is_fullscreen_origin(idx) {
                     assert!(
                         ws.has_windows_or_name(),
                         "non-active workspace can't be empty and unnamed except the last one"

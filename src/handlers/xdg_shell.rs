@@ -365,7 +365,13 @@ impl XdgShellHandler for State {
                 }
 
                 let mon = self.niri.layout.monitor_for_output(output).unwrap();
-                if mon.render_above_top_layer() && layer.layer() != Layer::Overlay {
+                // ashd: except for edge panels revealed over the fullscreen window.
+                let revealed = self
+                    .niri
+                    .edge_reveal
+                    .placement(layer)
+                    .is_some_and(|p| p.above);
+                if mon.render_above_top_layer() && layer.layer() != Layer::Overlay && !revealed {
                     trace!("ignoring popup grab for a layer surface below fullscreen window");
                     let _ = PopupManager::dismiss_popup(&root, &popup);
                     return;
