@@ -14,7 +14,7 @@ use super::closing_window::{ClosingWindow, ClosingWindowRenderElement};
 use super::monitor::InsertPosition;
 use super::tab_indicator::{TabIndicator, TabIndicatorRenderElement, TabInfo};
 use super::tile::{Tile, TileRenderElement, TileRenderSnapshot};
-use super::title_bar::title_bar_height_for; // rice
+use super::title_bar::title_bar_height_for; // ashd
 use super::workspace::{InteractiveResize, ResolvedSize};
 use super::{ConfigureIntent, HitType, InteractiveResizeData, LayoutElement, Options, RemovedTile};
 use crate::animation::{Animation, Clock};
@@ -29,7 +29,7 @@ use crate::utils::transaction::{Transaction, TransactionBlocker};
 use crate::utils::ResizeEdge;
 use crate::window::ResolvedWindowRules;
 
-// rice: strip arrangement snapshot/restore for canvas mode.
+// ashd: strip arrangement snapshot/restore for canvas mode.
 mod strip_snapshot;
 pub use strip_snapshot::{SavedColumn, StripArrangement};
 
@@ -457,7 +457,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns.iter_mut().flat_map(|col| col.tiles.iter_mut())
     }
 
-    /// rice: the working area with the struts applied.
+    /// ashd: the working area with the struts applied.
     pub fn working_area(&self) -> Rectangle<f64, Logical> {
         self.working_area
     }
@@ -559,14 +559,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             0
         };
 
-        // rice: tile heights include the title strip.
+        // ashd: tile heights include the title strip.
         let title_bar = title_bar_height_for(&self.options, rules);
 
         let mut full_height = self.working_area.size.h - self.options.layout.gaps * 2.;
         if !border.off {
             full_height -= border.width * 2.;
         }
-        full_height -= title_bar; // rice
+        full_height -= title_bar; // ashd
 
         let height = if let Some(height) = height {
             let height = match resolve_preset_size(height, &self.options, working_size.h, extra.h) {
@@ -574,7 +574,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                     if !border.off {
                         size -= border.width * 2.;
                     }
-                    size - title_bar // rice
+                    size - title_bar // ashd
                 }
                 ResolvedSize::Window(size) => size,
             };
@@ -4152,7 +4152,7 @@ impl<W: LayoutElement> Column<W> {
             update_sizes = true;
         }
 
-        // rice: the title strip is part of the tile height.
+        // ashd: the title strip is part of the tile height.
         if self
             .options
             .layout
@@ -5688,7 +5688,7 @@ fn compute_new_view_offset(
     }
 }
 
-/// rice: the tab indicator config, moved outwards past a focus ring with a gap (the ring goes
+/// ashd: the tab indicator config, moved outwards past a focus ring with a gap (the ring goes
 /// around the tile grown by the gap, so the indicator would sit inside the ring otherwise).
 fn tab_indicator_config(options: &Options) -> niri_config::TabIndicator {
     let mut config = options.layout.tab_indicator;

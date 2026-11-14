@@ -447,7 +447,7 @@ pub struct Niri {
     pub locked_hint: Option<bool>,
 
     pub screenshot_ui: ScreenshotUi,
-    /// rice: clipboard/notification choice of the open screenshot UI.
+    /// ashd: clipboard/notification choice of the open screenshot UI.
     pub screenshot_ui_delivery: ScreenshotDelivery,
     pub config_error_notification: ConfigErrorNotification,
     pub hotkey_overlay: HotkeyOverlay,
@@ -580,7 +580,7 @@ pub struct PopupGrabState {
     pub has_keyboard_grab: bool,
 }
 
-/// rice: what happens with a screenshot besides writing it to disk.
+/// ashd: what happens with a screenshot besides writing it to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenshotDelivery {
     /// Put the image into the clipboard.
@@ -633,7 +633,7 @@ pub struct PointContents {
 }
 
 impl PointContents {
-    /// rice: zoom of the window under the point if it receives input while drawn scaled (a
+    /// ashd: zoom of the window under the point if it receives input while drawn scaled (a
     /// zoomed canvas).
     pub fn scaled_input_zoom(&self) -> Option<f64> {
         match self.window {
@@ -642,7 +642,7 @@ impl PointContents {
         }
     }
 
-    /// rice: downgrades scaled input hits to activate-only, for input paths that cannot deliver
+    /// ashd: downgrades scaled input hits to activate-only, for input paths that cannot deliver
     /// scaled coordinates (touch: smithay keeps the touch-down focus location for the whole
     /// touch sequence).
     pub fn without_scaled_input(mut self) -> Self {
@@ -654,7 +654,7 @@ impl PointContents {
     }
 }
 
-/// rice: (sub)surface of a window drawn scaled by `zoom` with its buffer at `win_pos` under
+/// ashd: (sub)surface of a window drawn scaled by `zoom` with its buffer at `win_pos` under
 /// `pos` (`pos` and `win_pos` in the same scaled coordinates).
 ///
 /// Returns the surface and the focus location for smithay. Smithay computes surface-local
@@ -1236,9 +1236,9 @@ impl State {
         let active_output = self.niri.layout.active_output().cloned();
 
         self.niri.layout.activate_window(window);
-        // rice: keyboard/IPC focus recentres a canvas view on the window.
+        // ashd: keyboard/IPC focus recentres a canvas view on the window.
         self.niri.layout.canvas_reveal_window(window);
-        // rice: and takes the keyboard from an on-demand layer surface (the window must really
+        // ashd: and takes the keyboard from an on-demand layer surface (the window must really
         // get the keyboard, like with the directional focus actions).
         self.niri.layer_shell_on_demand_focus = None;
 
@@ -2357,7 +2357,7 @@ impl State {
                 .screenshot_ui
                 .open(renderer, screenshots, default_output, show_pointer, path)
         });
-        self.niri.screenshot_ui_delivery = delivery; // rice
+        self.niri.screenshot_ui_delivery = delivery; // ashd
 
         self.niri
             .cursor_manager
@@ -2403,7 +2403,7 @@ impl State {
             return;
         };
         let path = path.take();
-        let delivery = mem::take(&mut self.niri.screenshot_ui_delivery); // rice
+        let delivery = mem::take(&mut self.niri.screenshot_ui_delivery); // ashd
 
         self.backend.with_primary_renderer(|renderer| {
             match self.niri.screenshot_ui.capture(renderer) {
@@ -3070,7 +3070,7 @@ impl Niri {
             locked_hint: None,
 
             screenshot_ui,
-            screenshot_ui_delivery: ScreenshotDelivery::default(), // rice
+            screenshot_ui_delivery: ScreenshotDelivery::default(), // ashd
             config_error_notification,
             hotkey_overlay,
             exit_confirm_dialog,
@@ -3876,7 +3876,7 @@ impl Niri {
                             (s, pos_within_window.to_f64() + win_pos_within_output)
                         })
                 }
-                // rice: a window drawn scaled (zoomed canvas).
+                // ashd: a window drawn scaled (zoomed canvas).
                 HitType::ScaledInput { win_pos, zoom } => {
                     scaled_surface_under(window, pos_within_output, win_pos, zoom)
                 }
@@ -4092,7 +4092,7 @@ impl Niri {
     ) -> Option<(Option<Output>, usize)> {
         let (target_workspace_index, target_workspace) = match workspace_reference {
             WorkspaceReference::Index(index) => {
-                // rice: indices count the visible workspaces only (hidden ones are skipped).
+                // ashd: indices count the visible workspaces only (hidden ones are skipped).
                 let index = self.layout.resolve_workspace_index(window, index);
                 return Some((None, index));
             }
@@ -4300,7 +4300,7 @@ impl Niri {
                 }
             }
         }
-        // rice: a window drawn scaled (zoomed canvas). Callers draw the cursor at
+        // ashd: a window drawn scaled (zoomed canvas). Callers draw the cursor at
         // `pointer - win_pos` within the unscaled window, so report a window position that puts
         // the cursor at its unscaled position.
         else if let Some((w, HitType::ScaledInput { win_pos, zoom })) =
@@ -6748,7 +6748,7 @@ impl Niri {
         // Prepare to set the encoded image as our clipboard selection. This must be done from the
         // main thread.
         let (tx, rx) = calloop::channel::sync_channel::<Arc<[u8]>>(1);
-        // rice: unless the caller doesn't want it in the clipboard.
+        // ashd: unless the caller doesn't want it in the clipboard.
         let tx = delivery.copy_to_clipboard.then_some(tx);
         self.event_loop
             .insert_source(rx, move |event, _, state| match event {
@@ -6818,7 +6818,7 @@ impl Niri {
                 debug!("not saving screenshot to disk");
             }
 
-            // rice: the desktop notification is optional.
+            // ashd: the desktop notification is optional.
             #[cfg(feature = "dbus")]
             if delivery.notify {
                 if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref())
@@ -7233,7 +7233,7 @@ impl Niri {
             return;
         };
 
-        // rice: pointer constraints are not activated on windows drawn scaled (zoomed canvas).
+        // ashd: pointer constraints are not activated on windows drawn scaled (zoomed canvas).
         if self.pointer_contents.scaled_input_zoom().is_some() {
             return;
         }

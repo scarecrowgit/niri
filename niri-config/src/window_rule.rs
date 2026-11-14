@@ -84,7 +84,7 @@ pub struct WindowRule {
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]
     pub popups: PopupsRule,
-    /// rice: show (or hide) the compositor-drawn title bar.
+    /// ashd: show (or hide) the compositor-drawn title bar.
     #[knuffel(child, unwrap(argument))]
     pub title_bar: Option<bool>,
 }

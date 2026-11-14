@@ -120,7 +120,7 @@ impl SeatHandler for State {
         &mut self,
         start_data: pointer::GrabStartData<Self>,
     ) -> impl pointer::PointerGrab<Self> {
-        // rice: surfaces drawn scaled (zoomed canvas) keep receiving scaled coordinates.
+        // ashd: surfaces drawn scaled (zoomed canvas) keep receiving scaled coordinates.
         let contents = &self.niri.pointer_contents;
         let same_surface =
             start_data.focus.as_ref().map(|(s, _)| s) == contents.surface.as_ref().map(|(s, _)| s);

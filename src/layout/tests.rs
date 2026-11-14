@@ -15,11 +15,11 @@ use super::canvas::CanvasPanDirection;
 use super::*;
 
 mod animations;
-mod canvas; // rice
-mod decorations; // rice
+mod canvas; // ashd
+mod decorations; // ashd
 mod fullscreen;
-mod scratch; // rice
-mod work_area; // rice
+mod scratch; // ashd
+mod work_area; // ashd
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -353,7 +353,7 @@ prop_compose! {
     fn arbitrary_rules()(
         focus_ring in arbitrary_focus_ring(),
         border in arbitrary_border(),
-        title_bar in prop::option::of(any::<bool>()), // rice
+        title_bar in prop::option::of(any::<bool>()), // ashd
     ) -> ResolvedWindowRules {
         ResolvedWindowRules {
             focus_ring,
@@ -777,7 +777,7 @@ enum Op {
         #[proptest(strategy = "arbitrary_layout_part().prop_map(Box::new)")]
         layout_config: Box<niri_config::LayoutPart>,
     },
-    // rice: canvas mode.
+    // ashd: canvas mode.
     ToggleWorkspaceMode,
     SetWorkspaceMode(#[proptest(strategy = "arbitrary_workspace_mode()")] WorkspaceMode),
     CanvasPan(#[proptest(strategy = "arbitrary_canvas_pan_direction()")] CanvasPanDirection),
@@ -808,15 +808,15 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
-    // rice: hidden (scratchpad) workspaces (nested to keep the Op strategy small).
+    // ashd: hidden (scratchpad) workspaces (nested to keep the Op strategy small).
     Scratch(ScratchOp),
-    // rice: canvas pointer and gesture input (nested to keep the Op strategy small).
+    // ashd: canvas pointer and gesture input (nested to keep the Op strategy small).
     CanvasInput(CanvasInputOp),
-    // rice: render element updates (working area clip, canvas decorations).
+    // ashd: render element updates (working area clip, canvas decorations).
     UpdateRenderElements,
 }
 
-/// rice: hidden (scratchpad) workspace operations.
+/// ashd: hidden (scratchpad) workspace operations.
 #[derive(Debug, Clone, Arbitrary)]
 enum ScratchOp {
     AddHiddenWorkspace {
@@ -841,7 +841,7 @@ enum ScratchOp {
     },
 }
 
-/// rice: canvas pointer and gesture input operations.
+/// ashd: canvas pointer and gesture input operations.
 #[derive(Debug, Clone, Copy, Arbitrary)]
 enum CanvasInputOp {
     PanBegin {
@@ -1066,7 +1066,7 @@ impl Op {
                         .map(|name| format!("output{name}"))
                         .collect(),
                     layout: layout_config.map(|x| niri_config::WorkspaceLayoutPart(*x)),
-                    hidden: false, // rice
+                    hidden: false, // ashd
                 });
             }
             Op::UnnameWorkspace { ws_name } => {
@@ -1831,7 +1831,7 @@ impl Op {
 
                 layout.update_options(options);
             }
-            // rice: canvas mode.
+            // ashd: canvas mode.
             Op::ToggleWorkspaceMode => layout.toggle_workspace_mode(),
             Op::SetWorkspaceMode(mode) => layout.set_workspace_mode(mode),
             Op::CanvasPan(direction) => layout.canvas_pan(direction),
@@ -1859,9 +1859,9 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.toggle_window_pinned(id.as_ref());
             }
-            Op::Scratch(op) => op.apply(layout), // rice
+            Op::Scratch(op) => op.apply(layout), // ashd
             Op::CanvasInput(op) => op.apply(layout),
-            Op::UpdateRenderElements => layout.update_render_elements(None), // rice
+            Op::UpdateRenderElements => layout.update_render_elements(None), // ashd
         }
     }
 }
@@ -2102,11 +2102,11 @@ fn operations_dont_panic() {
         Op::ConsumeOrExpelWindowRight { id: None },
         Op::MoveWorkspaceToOutput(1),
         Op::ToggleColumnTabbedDisplay,
-        // rice: canvas mode.
+        // ashd: canvas mode.
         Op::ToggleWorkspaceMode,
         Op::CanvasZoomOut { anchor: None },
         Op::CanvasFit,
-        // rice: hidden (scratchpad) workspaces.
+        // ashd: hidden (scratchpad) workspaces.
         Op::Scratch(ScratchOp::AddHiddenWorkspace {
             ws_name: 4,
             output_names: vec![],
@@ -2292,11 +2292,11 @@ fn operations_from_starting_state_dont_panic() {
         Op::ConsumeOrExpelWindowLeft { id: None },
         Op::ConsumeOrExpelWindowRight { id: None },
         Op::ToggleColumnTabbedDisplay,
-        // rice: canvas mode.
+        // ashd: canvas mode.
         Op::ToggleWorkspaceMode,
         Op::CanvasZoomOut { anchor: None },
         Op::CanvasFit,
-        // rice: hidden (scratchpad) workspaces.
+        // ashd: hidden (scratchpad) workspaces.
         Op::Scratch(ScratchOp::AddHiddenWorkspace {
             ws_name: 4,
             output_names: vec![],
@@ -4153,7 +4153,7 @@ fn arbitrary_spacing_neg() -> impl Strategy<Value = f64> {
     prop_oneof![Just(0.), Just(4.), Just(-4.), ((1.)..=65535.)]
 }
 
-// rice: struts merge per side.
+// ashd: struts merge per side.
 fn arbitrary_struts_part() -> impl Strategy<Value = niri_config::StrutsPart> {
     (
         prop::option::of(arbitrary_spacing_neg()),
@@ -4190,7 +4190,7 @@ prop_compose! {
     fn arbitrary_focus_ring()(
         off in any::<bool>(),
         width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-        // rice: focus ring gap and canvas style.
+        // ashd: focus ring gap and canvas style.
         gap in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
         canvas_style in prop::option::of(prop_oneof![
             Just(niri_config::FocusRingCanvasStyle::Ring),
@@ -4262,7 +4262,7 @@ prop_compose! {
     }
 }
 
-// rice: compositor-drawn title strips.
+// ashd: compositor-drawn title strips.
 prop_compose! {
     fn arbitrary_title_bar()(
         off in any::<bool>(),
@@ -4278,7 +4278,7 @@ prop_compose! {
     }
 }
 
-// rice: working area outline and clip.
+// ashd: working area outline and clip.
 prop_compose! {
     fn arbitrary_work_area()(
         outline_width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
@@ -4297,7 +4297,7 @@ prop_compose! {
 prop_compose! {
     fn arbitrary_layout_part()(
         gaps in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-        struts in prop::option::of(arbitrary_struts_part()), // rice: per side
+        struts in prop::option::of(arbitrary_struts_part()), // ashd: per side
         focus_ring in prop::option::of(arbitrary_focus_ring()),
         border in prop::option::of(arbitrary_border()),
         shadow in prop::option::of(arbitrary_shadow()),
@@ -4306,8 +4306,8 @@ prop_compose! {
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
         default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
-        title_bar in prop::option::of(arbitrary_title_bar()), // rice
-        work_area in prop::option::of(arbitrary_work_area()), // rice
+        title_bar in prop::option::of(arbitrary_title_bar()), // ashd
+        work_area in prop::option::of(arbitrary_work_area()), // ashd
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             default_workspace_mode,

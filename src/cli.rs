@@ -143,7 +143,7 @@ impl TryFrom<CompletionShell> for Shell {
     }
 }
 
-// rice: CLI flags of the fork's IPC additions.
+// ashd: CLI flags of the fork's IPC additions.
 #[cfg(test)]
 mod tests {
     use super::*;

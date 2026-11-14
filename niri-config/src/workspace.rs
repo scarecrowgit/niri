@@ -10,7 +10,7 @@ pub struct Workspace {
     pub open_on_output: Vec<String>,
     #[knuffel(child)]
     pub layout: Option<WorkspaceLayoutPart>,
-    /// rice: hidden (scratchpad) workspace.
+    /// ashd: hidden (scratchpad) workspace.
     ///
     /// A hidden workspace never becomes the active workspace of a monitor: it is skipped by
     /// workspace navigation and gestures, not shown in the overview, and its windows are left out

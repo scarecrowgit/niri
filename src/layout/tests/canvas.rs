@@ -1,4 +1,4 @@
-//! rice: tests for the infinite canvas workspace mode.
+//! ashd: tests for the infinite canvas workspace mode.
 
 use approx::assert_abs_diff_eq;
 
@@ -1104,7 +1104,7 @@ fn title_strip_hit_through_zoom() {
     assert!(ws(&layout).window_under(below).is_none());
 }
 
-// rice: the moved tile's zoom animates when it crosses to a workspace with another zoom.
+// ashd: the moved tile's zoom animates when it crosses to a workspace with another zoom.
 #[test]
 fn interactive_move_zoom_animates_between_canvas_and_strip() {
     let mut layout = check_ops([
@@ -1177,7 +1177,7 @@ fn interactive_move_zoom_animates_between_canvas_and_strip() {
     check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 2 }]);
 }
 
-// rice: moving a canvas window to another workspace animates from where it is drawn.
+// ashd: moving a canvas window to another workspace animates from where it is drawn.
 #[test]
 fn move_to_workspace_animates_from_the_drawn_position() {
     let mut layout = check_ops([
@@ -1208,7 +1208,7 @@ fn move_to_workspace_animates_from_the_drawn_position() {
     assert!(pos.y >= drawn.y - 1.5 * height, "{pos:?} vs {drawn:?}");
 }
 
-// rice: tiles (title strip text, frame widths) only see the settled zoom, so nothing is
+// ashd: tiles (title strip text, frame widths) only see the settled zoom, so nothing is
 // re-rasterized per frame of a zoom animation; the text texture is scaled while animating.
 #[test]
 fn tiles_keep_the_settled_zoom_during_a_zoom_animation() {

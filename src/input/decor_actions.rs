@@ -1,4 +1,4 @@
-//! rice: actions for canvas plane decorations (named regions).
+//! ashd: actions for canvas plane decorations (named regions).
 
 use niri_config::{Action, CanvasRegion};
 

@@ -1,4 +1,4 @@
-//! rice: hidden (scratchpad) workspaces.
+//! ashd: hidden (scratchpad) workspaces.
 //!
 //! A named workspace with `hidden` in its config entry is a *hidden* workspace. It keeps its place
 //! in its monitor's workspace list (the layout code works with real indices), but:

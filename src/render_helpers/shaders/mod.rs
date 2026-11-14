@@ -21,7 +21,7 @@ pub struct Shaders {
     pub custom_resize: RefCell<Option<ShaderProgram>>,
     pub custom_close: RefCell<Option<ShaderProgram>>,
     pub custom_open: RefCell<Option<ShaderProgram>>,
-    /// rice: canvas plane grid and region outlines.
+    /// ashd: canvas plane grid and region outlines.
     pub canvas_grid: Option<ShaderProgram>,
 }
 
@@ -32,7 +32,7 @@ pub enum ProgramType {
     Resize,
     Close,
     Open,
-    CanvasGrid, // rice
+    CanvasGrid, // ashd
 }
 
 impl Shaders {
@@ -145,7 +145,7 @@ impl Shaders {
             })
             .ok();
 
-        // rice: canvas plane grid and region outlines.
+        // ashd: canvas plane grid and region outlines.
         let canvas_grid = ShaderProgram::compile(
             renderer,
             include_str!("canvas_grid.frag"),
@@ -233,7 +233,7 @@ impl Shaders {
                 .or_else(|| self.resize.clone()),
             ProgramType::Close => self.custom_close.borrow().clone(),
             ProgramType::Open => self.custom_open.borrow().clone(),
-            ProgramType::CanvasGrid => self.canvas_grid.clone(), // rice
+            ProgramType::CanvasGrid => self.canvas_grid.clone(), // ashd
         }
     }
 }

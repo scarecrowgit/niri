@@ -1,4 +1,4 @@
-//! rice: working area outline and clipping for "floating" shell themes.
+//! ashd: working area outline and clipping for "floating" shell themes.
 //!
 //! Floating themes draw the shell panels as separate rounded boxes with a gap between them, and
 //! the main window area as one more rounded box: a thin outline around the working area, with

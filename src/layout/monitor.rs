@@ -348,7 +348,7 @@ impl<W: LayoutElement> Monitor<W> {
             options,
             layout_config,
         };
-        // rice: a hidden workspace is never the active one.
+        // ashd: a hidden workspace is never the active one.
         monitor.ensure_active_visible();
         monitor
     }
@@ -427,7 +427,7 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx += 1;
         }
 
-        // rice: workspace switches run in visual indices (hidden workspaces don't count).
+        // ashd: workspace switches run in visual indices (hidden workspaces don't count).
         let visual_idx = self.visual_idx(idx);
         if let Some(switch) = &mut self.workspace_switch {
             if visual_idx as f64 <= switch.target_idx() {
@@ -453,11 +453,11 @@ impl<W: LayoutElement> Monitor<W> {
         idx: usize,
         config: Option<niri_config::Animation>,
     ) {
-        // rice: hidden workspaces never become active.
+        // ashd: hidden workspaces never become active.
         if self.is_hidden_idx(idx) {
             return;
         }
-        // rice: the switch animates between visual indices.
+        // ashd: the switch animates between visual indices.
         let visual_idx = self.visual_idx(idx);
 
         // FIXME: also compute and use current velocity.
@@ -697,7 +697,7 @@ impl<W: LayoutElement> Monitor<W> {
         let ws = &mut self.workspaces[idx];
 
         ws.unname();
-        // rice: an unnamed workspace is no longer hidden.
+        // ashd: an unnamed workspace is no longer hidden.
         self.drop_stale_workspace_switch();
 
         if self.workspace_switch.is_none() {
@@ -728,7 +728,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
 
         ws
     }
@@ -760,7 +760,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
     }
 
     pub fn append_workspaces(&mut self, mut workspaces: Vec<Workspace<W>>) {
@@ -798,7 +798,7 @@ impl<W: LayoutElement> Monitor<W> {
         // (outside the workspace switch), we don't need to cancel it.
         self.workspace_switch = None;
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {
@@ -826,13 +826,13 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_to_workspace_up(&mut self, activate: ActivateWindow) {
-        // rice: skip hidden workspaces.
+        // ashd: skip hidden workspaces.
         let new_idx = self.visible_idx_up(self.active_workspace_idx);
         self.move_to_workspace(None, new_idx, activate);
     }
 
     pub fn move_to_workspace_down(&mut self, activate: ActivateWindow) {
-        // rice: skip hidden workspaces.
+        // ashd: skip hidden workspaces.
         let new_idx = self.visible_idx_down(self.active_workspace_idx);
         self.move_to_workspace(None, new_idx, activate);
     }
@@ -852,7 +852,7 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx
         };
         let source_id = self.workspaces[source_workspace_idx].id();
-        // rice: windows leaving a hidden workspace just appear (it is not on screen).
+        // ashd: windows leaving a hidden workspace just appear (it is not on screen).
         let from_hidden = self.workspaces[source_workspace_idx].is_hidden();
 
         let new_idx = min(idx, self.workspaces.len() - 1);
@@ -875,7 +875,7 @@ impl<W: LayoutElement> Monitor<W> {
             .tiles_with_render_positions()
             .find_map(|(tile, offset, _visible)| (tile.window().id() == &window).then_some(offset))
             .unwrap();
-        // rice: canvas tiles report unscaled positions; animate from where it is drawn.
+        // ashd: canvas tiles report unscaled positions; animate from where it is drawn.
         old_render_pos = old_render_pos.upscale(canvas_tile_zoom(workspace, &window));
 
         let transaction = Transaction::new();
@@ -918,7 +918,7 @@ impl<W: LayoutElement> Monitor<W> {
         // source workspace itself was removed, don't bother animating this since the removal is
         // instant anyway.
         if let Some(source_workspace_idx) = self.idx_of_ws(source_id) {
-            // rice: in visual indices, so that hidden workspaces in between don't count.
+            // ashd: in visual indices, so that hidden workspaces in between don't count.
             let source_visual_idx = self.visual_idx(source_workspace_idx) as f64;
             let new_visual_idx = self.visual_idx(new_idx) as f64;
             old_render_pos.y +=
@@ -928,7 +928,7 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        // rice: on a canvas, the tile offset is drawn scaled by the canvas zoom.
+        // ashd: on a canvas, the tile offset is drawn scaled by the canvas zoom.
         let new_zoom = canvas_tile_zoom(&self.workspaces[new_idx], &window);
         let (tile, new_render_pos) = self.workspaces[new_idx]
             .tiles_with_render_positions_mut(false)
@@ -942,13 +942,13 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_column_to_workspace_up(&mut self, activate: bool) {
-        // rice: skip hidden workspaces.
+        // ashd: skip hidden workspaces.
         let new_idx = self.visible_idx_up(self.active_workspace_idx);
         self.move_column_to_workspace(new_idx, activate);
     }
 
     pub fn move_column_to_workspace_down(&mut self, activate: bool) {
-        // rice: skip hidden workspaces.
+        // ashd: skip hidden workspaces.
         let new_idx = self.visible_idx_down(self.active_workspace_idx);
         self.move_column_to_workspace(new_idx, activate);
     }
@@ -984,7 +984,7 @@ impl<W: LayoutElement> Monitor<W> {
         let column = workspace.remove_active_column().unwrap();
 
         // Animate vertical movement between workspaces.
-        // rice: in visual indices, so that hidden workspaces in between don't count.
+        // ashd: in visual indices, so that hidden workspaces in between don't count.
         let source_visual_idx = self.visual_idx(source_workspace_idx) as f64;
         let new_visual_idx = self.visual_idx(new_idx) as f64;
         old_render_pos.y +=
@@ -1001,7 +1001,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.add_column(new_idx, column, activate, Some(config));
 
         let new_idx = self.idx_of_ws(new_id).unwrap();
-        // rice: a column moved onto a canvas workspace is spilled onto the plane.
+        // ashd: a column moved onto a canvas workspace is spilled onto the plane.
         let Some((column, new_render_pos)) = self.workspaces[new_idx]
             .scrolling_mut()
             .columns_with_render_positions_mut()
@@ -1014,7 +1014,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn switch_workspace_up(&mut self) {
-        // rice: gesture indices are visual, hidden workspaces are skipped.
+        // ashd: gesture indices are visual, hidden workspaces are skipped.
         let new_idx = match &self.workspace_switch {
             // During a DnD scroll, select the prev apparent workspace.
             Some(WorkspaceSwitch::Gesture(gesture)) if gesture.dnd_last_event_time.is_some() => {
@@ -1030,7 +1030,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn switch_workspace_down(&mut self) {
-        // rice: gesture indices are visual, hidden workspaces are skipped.
+        // ashd: gesture indices are visual, hidden workspaces are skipped.
         let new_idx = match &self.workspace_switch {
             // During a DnD scroll, select the next apparent workspace.
             Some(WorkspaceSwitch::Gesture(gesture)) if gesture.dnd_last_event_time.is_some() => {
@@ -1256,7 +1256,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.base_options = base_options;
         self.options = options;
 
-        // rice: a workspace may have become hidden or visible.
+        // ashd: a workspace may have become hidden or visible.
         self.ensure_active_visible();
         self.drop_stale_workspace_switch();
     }
@@ -1291,7 +1291,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_workspace_down(&mut self) {
-        // rice: swap with the next visible workspace.
+        // ashd: swap with the next visible workspace.
         let mut new_idx = self.visible_idx_down(self.active_workspace_idx);
         if new_idx == self.active_workspace_idx {
             return;
@@ -1315,11 +1315,11 @@ impl<W: LayoutElement> Monitor<W> {
         self.previous_workspace_id = previous_workspace_id;
 
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
     }
 
     pub fn move_workspace_up(&mut self) {
-        // rice: swap with the previous visible workspace.
+        // ashd: swap with the previous visible workspace.
         let mut new_idx = self.visible_idx_up(self.active_workspace_idx);
         if new_idx == self.active_workspace_idx {
             return;
@@ -1343,7 +1343,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.previous_workspace_id = previous_workspace_id;
 
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
     }
 
     pub fn move_workspace_to_idx(&mut self, old_idx: usize, new_idx: usize) {
@@ -1395,7 +1395,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch = None;
 
         self.clean_up_workspaces();
-        self.ensure_active_visible(); // rice
+        self.ensure_active_visible(); // ashd
     }
 
     /// Returns the geometry of the active window relative to and clamped to the output.
@@ -1523,7 +1523,7 @@ impl<W: LayoutElement> Monitor<W> {
         if let Some(switch) = &self.workspace_switch {
             switch.current_idx()
         } else {
-            // rice: visual index (hidden workspaces don't take up space).
+            // ashd: visual index (hidden workspaces don't take up space).
             self.visual_idx(self.active_workspace_idx) as f64
         }
     }
@@ -1544,7 +1544,7 @@ impl<W: LayoutElement> Monitor<W> {
         let first_ws_y = -self.workspace_render_idx() * ws_height_with_gap;
         let first_ws_y = round_logical_in_physical(scale, first_ws_y);
 
-        // rice: hidden workspaces take up no space; they get the geometry of the next visible
+        // ashd: hidden workspaces take up no space; they get the geometry of the next visible
         // workspace and are filtered out of the render/hit-test iterators below.
         let hidden: Vec<bool> = if self.workspaces.iter().any(|ws| ws.is_hidden()) {
             self.workspaces.iter().map(|ws| ws.is_hidden()).collect()
@@ -1581,7 +1581,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter(), geo)
-            // rice: hidden workspaces are never shown.
+            // ashd: hidden workspaces are never shown.
             .filter(|(ws, _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
@@ -1600,7 +1600,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter().enumerate(), geo)
-            // rice: hidden workspaces are never shown.
+            // ashd: hidden workspaces are never shown.
             .filter(|((_, ws), _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| geo.intersection(output_geo).is_some())
@@ -1614,7 +1614,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter_mut(), geo)
-            // rice: hidden workspaces are never shown.
+            // ashd: hidden workspaces are never shown.
             .filter(|(ws, _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
@@ -1786,7 +1786,7 @@ impl<W: LayoutElement> Monitor<W> {
             )
         };
 
-        // rice: working area outlines and corner masks above everything of their workspace.
+        // ashd: working area outlines and corner masks above everything of their workspace.
         if self.workspaces.iter().any(|ws| ws.has_work_area_decor()) {
             let crop_bounds = if self.workspace_switch.is_some() || self.overview_progress.is_some()
             {
@@ -1863,7 +1863,7 @@ impl<W: LayoutElement> Monitor<W> {
                     }};
                 }
 
-                // rice: the normal layer of a workspace may be clipped to its working area.
+                // ashd: the normal layer of a workspace may be clipped to its working area.
                 let clip_bounds = ws.work_area_clip().filter(|_| cull).map(|clip| {
                     let clip = clip.to_physical_precise_round(scale);
                     clip.intersection(crop_bounds).unwrap_or_default()
@@ -1969,7 +1969,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn workspace_switch_gesture_begin(&mut self, is_touchpad: bool) {
-        // rice: gesture indices are visual.
+        // ashd: gesture indices are visual.
         let center_idx = self.visual_idx(self.active_workspace_idx);
         let current_idx = self.workspace_render_idx();
 
@@ -2002,7 +2002,7 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        // rice: gesture indices are visual.
+        // ashd: gesture indices are visual.
         let center_idx = self.visual_idx(self.active_workspace_idx);
         let current_idx = self.workspace_render_idx();
 
@@ -2040,7 +2040,7 @@ impl<W: LayoutElement> Monitor<W> {
         } else {
             self.workspace_size_with_gap(1.).h
         };
-        // rice: gesture bounds count visible workspaces only.
+        // ashd: gesture bounds count visible workspaces only.
         let workspace_count = self.visible_workspace_count();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
@@ -2076,7 +2076,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn dnd_scroll_gesture_scroll(&mut self, pos: Point<f64, Logical>, speed: f64) -> bool {
         let zoom = self.overview_zoom();
-        // rice: gesture bounds count visible workspaces only.
+        // ashd: gesture bounds count visible workspaces only.
         let workspace_count = self.visible_workspace_count();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
@@ -2178,7 +2178,7 @@ impl<W: LayoutElement> Monitor<W> {
         } else {
             self.workspace_size_with_gap(1.).h
         };
-        // rice: gesture indices are visual; map the result back to a real index.
+        // ashd: gesture indices are visual; map the result back to a real index.
         let visible = self.visible_workspace_indices();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
@@ -2236,7 +2236,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch_gesture_end(None);
     }
 
-    // rice: hidden (scratchpad) workspaces. They keep their real index (IPC, `focus-workspace N`,
+    // ashd: hidden (scratchpad) workspaces. They keep their real index (IPC, `focus-workspace N`,
     // `move-window-to-workspace N`), but are skipped by up/down navigation, never become active,
     // and take up no space on screen: workspace switch animations and gestures run in *visual*
     // indices that count only the visible workspaces. Without hidden workspaces, visual and real
@@ -2354,7 +2354,7 @@ impl<W: LayoutElement> Monitor<W> {
             "monitor must have at least one workspace"
         );
         assert!(self.active_workspace_idx < self.workspaces.len());
-        // rice: hidden workspaces.
+        // ashd: hidden workspaces.
         assert!(
             !self.workspaces[self.active_workspace_idx].is_hidden(),
             "a hidden workspace can't be active"
@@ -2368,7 +2368,7 @@ impl<W: LayoutElement> Monitor<W> {
             let before_idx = anim.from() as usize;
             let after_idx = anim.to() as usize;
 
-            // rice: switch animations run in visual indices.
+            // ashd: switch animations run in visual indices.
             let visible = self.visible_workspace_count();
             assert!(before_idx < visible);
             assert!(after_idx < visible);
@@ -2468,7 +2468,7 @@ impl<W: LayoutElement> Monitor<W> {
     }
 }
 
-/// rice: the zoom a tile of `ws` is drawn at: the canvas zoom for windows on a canvas plane, 1 for
+/// ashd: the zoom a tile of `ws` is drawn at: the canvas zoom for windows on a canvas plane, 1 for
 /// everything else (strip tiles, fullscreen/maximized windows of a canvas workspace).
 fn canvas_tile_zoom<W: LayoutElement>(ws: &Workspace<W>, window: &W::Id) -> f64 {
     if ws.is_canvas() && ws.is_floating(window) {

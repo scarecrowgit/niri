@@ -1,4 +1,4 @@
-//! rice: scratchpad actions (hidden workspaces, see `crate::layout::scratch`).
+//! ashd: scratchpad actions (hidden workspaces, see `crate::layout::scratch`).
 
 use niri_config::Action;
 

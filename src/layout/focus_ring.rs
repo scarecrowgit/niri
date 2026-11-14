@@ -20,7 +20,7 @@ pub struct FocusRing {
     use_border_shader: bool,
     config: niri_config::FocusRing,
     thicken_corners: bool,
-    /// rice: gap between the window and the ring used by the last update.
+    /// ashd: gap between the window and the ring used by the last update.
     gap: f64,
 }
 
@@ -71,7 +71,7 @@ impl FocusRing {
     ) {
         let width = self.config.width;
 
-        // rice: with a gap, the ring goes around the window grown by the gap on every side,
+        // ashd: with a gap, the ring goes around the window grown by the gap on every side,
         // with concentric corners, and is always drawn as a border (never as a background).
         let gap = self.config.gap.max(0.);
         self.gap = gap;
@@ -259,7 +259,7 @@ impl FocusRing {
         }
 
         let border_width = -self.locations[0].y;
-        // rice: the elements are laid out around the window grown by the gap.
+        // ashd: the elements are laid out around the window grown by the gap.
         let location = location - Point::from((self.gap, self.gap));
 
         // If drawing as a border with width = 0, then there's nothing to draw.

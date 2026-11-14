@@ -1,4 +1,4 @@
-//! rice: canvas actions and the keyboard-action hooks that keep the canvas view on the focus.
+//! ashd: canvas actions and the keyboard-action hooks that keep the canvas view on the focus.
 //!
 //! - [`State::do_canvas_action`] executes the canvas actions themselves.
 //! - [`CanvasActionHook`] wraps every action in `do_action()`: keyboard-driven focus changes

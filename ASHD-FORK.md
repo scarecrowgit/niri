@@ -1,12 +1,12 @@
-# rice fork of niri
+# ashd fork of niri
 
-This branch (`rice`) is a fork of upstream niri (base: `73a04441`, v26.04+). It adds a
+This branch (`ashd`) is a fork of upstream niri (base: `73a04441`, v26.04+). It adds a
 per-workspace **infinite canvas** window mode next to niri's scrolling strip. Everything else
 behaves exactly like upstream: with the default config, and on any workspace that never enters
 canvas mode, layout and rendering go through the same code paths with bit-identical numbers.
 
 The fork is kept rebasable: new logic lives in new files, and edits in upstream files are short
-and marked with a `// rice:` comment (or a `rice:` doc comment on new fields).
+and marked with a `// ashd:` comment (or a `ashd:` doc comment on new fields).
 
 ## What canvas mode is
 
@@ -412,9 +412,9 @@ cargo fmt --all -- --check
 ```
 
 Never run a development build against the live session (no TTY/DRM, never with the inherited
-`WAYLAND_DISPLAY` or `NIRI_SOCKET`). Runtime checks use the nested session of the rice test
-harness (`nix-new/rice/xtask`, see its README): `NIRI=<debug niri> SWAY=… cargo xtask nested
-start --niri-config test.kdl` prints a root `/tmp/rice-nested.XXXXXX`; `cargo xtask nested env
+`WAYLAND_DISPLAY` or `NIRI_SOCKET`). Runtime checks use the nested session of the ashd test
+harness (`nix-new/ashd/xtask`, see its README): `NIRI=<debug niri> SWAY=… cargo xtask nested
+start --niri-config test.kdl` prints a root `/tmp/ashd-nested.XXXXXX`; `cargo xtask nested env
 <root>` gives the scrubbed environment (headless sway, niri on winit inside it, private
 `XDG_RUNTIME_DIR`). Before every `niri msg …` check that `NIRI_SOCKET` lies under that root.
 Pointer and keyboard input can be driven with any `zwlr_virtual_pointer_v1` /
@@ -593,7 +593,7 @@ output to redraw). `Workspace`: the same per workspace plus `has_canvas_pan_gest
 
 ## Decorations: title strips, focus ring gap, canvas grid and regions
 
-Compositor-drawn window chrome and canvas plane decorations for the rice desktop design
+Compositor-drawn window chrome and canvas plane decorations for the ashd desktop design
 (`docs/design/pages/desk-05-*`, `sys-04-*`). Everything is **off by default**: without the
 options below, tiles, focus rings and canvas workspaces render exactly like before (no strip,
 gap 0, no grid, no regions, no extra render elements on strip workspaces).
@@ -824,7 +824,7 @@ focused workspace is a different one (e.g. `move-window-to-workspace` with focus
 foreign-toplevel activation and focus-follows-mouse into a window already cleared it (now covered
 by tests, including FFM back into the window that kept the layout focus). Clicks keep upstream
 behaviour; plain pointer motion without focus-follows-mouse leaves the layer focus alone.
-Code: `src/input/layer_focus_hook.rs`; tests: `src/tests/rice_focus.rs`.
+Code: `src/input/layer_focus_hook.rs`; tests: `src/tests/ashd_focus.rs`.
 
 ### Quiet screenshots
 
@@ -843,9 +843,9 @@ until it is confirmed. Old requests and existing binds behave as before.
 
 ```sh
 niri msg action screenshot-screen --write-to-disk true --show-pointer false \
-    --path /run/user/1000/rice/still.png --copy-to-clipboard false --notify false
+    --path /run/user/1000/ashd/still.png --copy-to-clipboard false --notify false
 ```
-`{"Action":{"ScreenshotScreen":{"write_to_disk":true,"show_pointer":false,"path":"/run/user/1000/rice/still.png","copy_to_clipboard":false,"notify":false}}}`
+`{"Action":{"ScreenshotScreen":{"write_to_disk":true,"show_pointer":false,"path":"/run/user/1000/ashd/still.png","copy_to_clipboard":false,"notify":false}}}`
 
 ### Work area outline and clip
 
@@ -1027,7 +1027,7 @@ binds {
 | `src/layout/work_area.rs` (new) | `WorkAreaDecor`, outline / corner masks / clip rect |
 | `src/layout/workspace/work_area_ext.rs` (new) | `Workspace` hooks: update, clip classification, render |
 | `src/input/layer_focus_hook.rs` (new) | `LayerFocusHook` around `do_action()` |
-| `src/tests/rice_focus.rs`, `src/tests/title_bar_input.rs`, `src/layout/tests/work_area.rs` (new) | tests |
+| `src/tests/ashd_focus.rs`, `src/tests/title_bar_input.rs`, `src/layout/tests/work_area.rs` (new) | tests |
 | `src/layout/scratch.rs` | visual index helpers, `resolve_workspace_index`, `ipc_workspace_idx` |
 | `src/layout/mod.rs` | `find_workspace_by_ref` / `move_workspace_to_idx` use visual indices; `mod work_area`; strip grab point; `MoveZoom` in `InteractiveMoveData` |
 | `src/layout/monitor.rs` | per-workspace work-area crop and outline pass; move-to-workspace animation origin under zoom |

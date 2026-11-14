@@ -1,4 +1,4 @@
-//! rice: working area outline and clip of a workspace (see `crate::layout::work_area`).
+//! ashd: working area outline and clip of a workspace (see `crate::layout::work_area`).
 
 use smithay::utils::{Logical, Rectangle};
 

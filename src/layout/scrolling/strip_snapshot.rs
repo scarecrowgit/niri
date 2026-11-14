@@ -1,4 +1,4 @@
-//! rice: saving and restoring the strip (column) arrangement around canvas mode.
+//! ashd: saving and restoring the strip (column) arrangement around canvas mode.
 //!
 //! When a workspace enters canvas mode, all tiles leave the scrolling space. To bring the strip
 //! back unchanged on the way out, the column structure is snapshotted here: column order, widths,
@@ -154,7 +154,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     /// Number of columns.
-    /// rice IPC: strip x of every column (x = 0 at the first column, gaps included), in order.
+    /// ashd IPC: strip x of every column (x = 0 at the first column, gaps included), in order.
     pub fn ipc_column_xs(&self) -> Vec<f64> {
         let mut xs: Vec<f64> = self.column_xs(self.data.iter().copied()).collect();
         // Drop the one-past-last entry.

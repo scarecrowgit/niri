@@ -263,7 +263,7 @@ pub enum Action {
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
-        // rice: copy to the clipboard, show the desktop notification.
+        // ashd: copy to the clipboard, show the desktop notification.
         #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
         #[knuffel(property(name = "notify"), default = true)] bool,
     ),
@@ -272,7 +272,7 @@ pub enum Action {
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
-        // rice: copy to the clipboard, show the desktop notification.
+        // ashd: copy to the clipboard, show the desktop notification.
         #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
         #[knuffel(property(name = "notify"), default = true)] bool,
     ),
@@ -281,7 +281,7 @@ pub enum Action {
         #[knuffel(property(name = "show-pointer"), default = false)] bool,
         // Path; not settable from knuffel
         Option<String>,
-        // rice: copy to the clipboard, show the desktop notification.
+        // ashd: copy to the clipboard, show the desktop notification.
         #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
         #[knuffel(property(name = "notify"), default = true)] bool,
     ),
@@ -291,8 +291,8 @@ pub enum Action {
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
-        copy_to_clipboard: bool, // rice
-        notify: bool,            // rice
+        copy_to_clipboard: bool, // ashd
+        notify: bool,            // ashd
     },
     ToggleKeyboardShortcutsInhibit,
     CloseWindow,
@@ -567,7 +567,7 @@ pub enum Action {
     #[knuffel(skip)]
     TestAction,
 
-    // rice: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
+    // ashd: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
     ToggleWorkspaceMode,
     SetWorkspaceMode(#[knuffel(argument, str)] WorkspaceMode),
     CanvasPanLeft,
@@ -580,7 +580,7 @@ pub enum Action {
     ),
     CanvasZoomIn(#[knuffel(property(name = "at-cursor"), default)] bool),
     CanvasZoomOut(#[knuffel(property(name = "at-cursor"), default)] bool),
-    /// rice: runs the first child action if the focused workspace is a canvas, the second one
+    /// ashd: runs the first child action if the focused workspace is a canvas, the second one
     /// (if any) otherwise, so that one key can do different things in the two modes.
     IfCanvas(#[knuffel(children)] Vec<Action>),
     CanvasSetZoom(#[knuffel(argument)] FloatOrInt<0, 4>),
@@ -592,14 +592,14 @@ pub enum Action {
     ToggleWindowPinned,
     #[knuffel(skip)]
     ToggleWindowPinnedById(u64),
-    // rice: scratchpad (hidden workspace) actions.
+    // ashd: scratchpad (hidden workspace) actions.
     HideWindow,
     #[knuffel(skip)]
     HideWindowById(u64),
     UnhideWindow,
     #[knuffel(skip)]
     UnhideWindowById(u64),
-    // rice: named canvas regions.
+    // ashd: named canvas regions.
     CanvasAddRegion(
         #[knuffel(argument)] String,
         #[knuffel(argument)] FloatOrInt<{ i32::MIN }, { i32::MAX }>,
@@ -964,7 +964,7 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
-            // rice: infinite canvas actions.
+            // ashd: infinite canvas actions.
             niri_ipc::Action::ToggleWorkspaceMode {} => Self::ToggleWorkspaceMode,
             niri_ipc::Action::SetWorkspaceMode { mode } => Self::SetWorkspaceMode(mode),
             niri_ipc::Action::CanvasPanLeft {} => Self::CanvasPanLeft,
@@ -985,12 +985,12 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::ToggleWindowPinned { id: Some(id) } => {
                 Self::ToggleWindowPinnedById(id)
             }
-            // rice: scratchpad actions.
+            // ashd: scratchpad actions.
             niri_ipc::Action::HideWindow { id: None } => Self::HideWindow,
             niri_ipc::Action::HideWindow { id: Some(id) } => Self::HideWindowById(id),
             niri_ipc::Action::UnhideWindow { id: None } => Self::UnhideWindow,
             niri_ipc::Action::UnhideWindow { id: Some(id) } => Self::UnhideWindowById(id),
-            // rice: named canvas regions.
+            // ashd: named canvas regions.
             niri_ipc::Action::CanvasAddRegion { name, x, y, w, h } => Self::CanvasAddRegion(
                 name,
                 FloatOrInt(x),
@@ -1301,7 +1301,7 @@ where
 
         let press_action = press_action.or(direct_action);
 
-        // rice: if-canvas takes a canvas action and an optional strip action.
+        // ashd: if-canvas takes a canvas action and an optional strip action.
         for action in press_action.iter().chain(release_action.iter()) {
             if let Action::IfCanvas(actions) = action {
                 if !(1..=2).contains(&actions.len()) {
@@ -1548,7 +1548,7 @@ impl FromStr for Key {
 mod tests {
     use super::*;
 
-    // rice: quiet screenshots.
+    // ashd: quiet screenshots.
     #[test]
     fn parse_screenshot_delivery() {
         let config = crate::Config::parse_mem(

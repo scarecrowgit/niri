@@ -1,4 +1,4 @@
-//! rice: unbounded (infinite canvas) mode of the floating space.
+//! ashd: unbounded (infinite canvas) mode of the floating space.
 //!
 //! In canvas mode the per-tile `Data` positions are plane coordinates without any clamping, and
 //! everything the floating space exposes to the rest of the layout is in *unscaled view*
@@ -17,7 +17,7 @@ use crate::utils::center_preferring_top_left_in_area;
 
 /// Position of a tile in the coordinates this floating space reports (unscaled view in canvas
 /// mode, working-area-relative logical in strip mode).
-pub(super) fn rice_u_pos(canvas: Option<CanvasTransform>, data: &Data) -> Point<f64, Logical> {
+pub(super) fn ashd_u_pos(canvas: Option<CanvasTransform>, data: &Data) -> Point<f64, Logical> {
     match canvas {
         Some(transform) if !data.pinned => transform.plane_to_unscaled(data.logical_pos),
         _ => data.logical_pos,
@@ -47,7 +47,7 @@ impl Data {
 impl<W: LayoutElement> FloatingSpace<W> {
     /// Area that size-fraction positions are relative to: the working area, in the coordinates
     /// this space reports. In canvas mode, the visible part of the working area.
-    pub(super) fn rice_frac_area(&self) -> Rectangle<f64, Logical> {
+    pub(super) fn ashd_frac_area(&self) -> Rectangle<f64, Logical> {
         match self.canvas {
             Some(transform) => Rectangle::new(
                 self.working_area.loc.downscale(transform.zoom),
@@ -58,7 +58,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     /// Tile centre in reported coordinates (consistent across pinned and normal tiles).
-    pub(super) fn rice_center(&self, data: &Data) -> Point<f64, Logical> {
+    pub(super) fn ashd_center(&self, data: &Data) -> Point<f64, Logical> {
         match self.canvas {
             Some(transform) if !data.pinned => transform.plane_to_unscaled(data.center()),
             _ => data.center(),
@@ -67,13 +67,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
     /// Data for a tile entering the canvas: exact plane position if it has one, otherwise its
     /// stored or default floating position relative to the visible area, otherwise centred.
-    pub(super) fn rice_new_data(&self, tile: &mut Tile<W>) -> Data {
+    pub(super) fn ashd_new_data(&self, tile: &mut Tile<W>) -> Data {
         let transform = self.canvas.unwrap_or_default();
         let plane = match tile.canvas_plane_pos.take() {
             Some(plane) => plane,
             None => {
                 let unscaled = self.stored_or_default_tile_pos(tile).unwrap_or_else(|| {
-                    center_preferring_top_left_in_area(self.rice_frac_area(), tile.tile_size())
+                    center_preferring_top_left_in_area(self.ashd_frac_area(), tile.tile_size())
                 });
                 transform.unscaled_to_plane(unscaled)
             }
@@ -82,21 +82,21 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     /// Records the plane position of a tile leaving the canvas.
-    pub(super) fn rice_on_remove(&self, tile: &mut Tile<W>, data: &Data) {
-        let unscaled = rice_u_pos(self.canvas, data);
+    pub(super) fn ashd_on_remove(&self, tile: &mut Tile<W>, data: &Data) {
+        let unscaled = ashd_u_pos(self.canvas, data);
         let plane = self.canvas.unwrap_or_default().unscaled_to_plane(unscaled);
         tile.canvas_plane_pos = Some(plane);
         tile.floating_pos = Some(self.logical_to_size_frac(unscaled));
     }
 
     /// Data position for centring tile `idx` in the visible area (canvas mode).
-    pub(super) fn rice_center_pos(&self, idx: usize) -> Point<f64, Logical> {
+    pub(super) fn ashd_center_pos(&self, idx: usize) -> Point<f64, Logical> {
         let data = &self.data[idx];
-        let unscaled = center_preferring_top_left_in_area(self.rice_frac_area(), data.size);
-        self.rice_unscaled_to_data(data, unscaled)
+        let unscaled = center_preferring_top_left_in_area(self.ashd_frac_area(), data.size);
+        self.ashd_unscaled_to_data(data, unscaled)
     }
 
-    fn rice_unscaled_to_data(
+    fn ashd_unscaled_to_data(
         &self,
         data: &Data,
         unscaled: Point<f64, Logical>,
@@ -109,7 +109,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
     /// Whether a canvas tile at `tile_pos` is near enough to `view_rect` (both unscaled view
     /// coordinates) to be worth rendering. Always true in strip mode.
-    pub(super) fn rice_tile_visible(
+    pub(super) fn ashd_tile_visible(
         &self,
         tile: &Tile<W>,
         tile_pos: Point<f64, Logical>,
@@ -151,7 +151,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
             (Some(current), None) => {
                 for data in &mut self.data {
-                    let view = rice_u_pos(Some(current), data).upscale(current.zoom);
+                    let view = ashd_u_pos(Some(current), data).upscale(current.zoom);
                     data.canvas = false;
                     data.pinned = false;
                     data.set_logical_pos(view);
@@ -184,13 +184,13 @@ impl<W: LayoutElement> FloatingSpace<W> {
     ) -> impl Iterator<Item = (&Tile<W>, Rectangle<f64, Logical>)> + '_ {
         let transform = self.canvas.unwrap_or_default();
         self.tiles.iter().zip(&self.data).map(move |(tile, data)| {
-            let unscaled = rice_u_pos(Some(transform), data);
+            let unscaled = ashd_u_pos(Some(transform), data);
             let plane = transform.unscaled_to_plane(unscaled);
             (tile, Rectangle::new(plane, data.size))
         })
     }
 
-    /// rice IPC: per tile, in tile order, whether it is pinned and its stored (target, not
+    /// ashd IPC: per tile, in tile order, whether it is pinned and its stored (target, not
     /// animated) position: the plane position, or the unscaled view position of a pinned tile.
     pub fn canvas_stored_positions(
         &self,
@@ -237,7 +237,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             return;
         }
 
-        let unscaled = rice_u_pos(Some(transform), data);
+        let unscaled = ashd_u_pos(Some(transform), data);
         data.pinned = pinned;
         let pos = if pinned {
             unscaled

@@ -1,4 +1,4 @@
-// rice: canvas plane background (line grid, dot grid) and dashed region outlines.
+// ashd: canvas plane background (line grid, dot grid) and dashed region outlines.
 //
 // All lengths in uniforms are in logical units of the element (workspace view pixels); they are
 // converted to physical pixels with the element's physical size, so that the pattern stays

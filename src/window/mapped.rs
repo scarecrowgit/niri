@@ -135,7 +135,7 @@ pub struct Mapped {
     /// Used for double-resize-click tracking.
     last_interactive_resize_start: Cell<Option<(Duration, ResizeEdge)>>,
 
-    /// rice: time of the last press on the compositor-drawn title bar, for double clicks.
+    /// ashd: time of the last press on the compositor-drawn title bar, for double clicks.
     last_title_bar_click: Cell<Option<Duration>>,
 
     /// Whether this window is in windowed (fake) fullscreen.
@@ -503,7 +503,7 @@ impl Mapped {
         &self.last_interactive_resize_start
     }
 
-    // rice
+    // ashd
     pub fn last_title_bar_click(&self) -> &Cell<Option<Duration>> {
         &self.last_title_bar_click
     }
@@ -1405,7 +1405,7 @@ impl LayoutElement for Mapped {
         Some(self.interactive_resize.as_ref()?.data())
     }
 
-    // rice: text of the compositor-drawn title bar.
+    // ashd: text of the compositor-drawn title bar.
     fn title_bar_text(&self) -> (Option<String>, Option<String>) {
         with_toplevel_role(self.toplevel(), |role| {
             (role.title.clone(), role.app_id.clone())

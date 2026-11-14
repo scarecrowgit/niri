@@ -33,7 +33,7 @@ pub mod appearance;
 pub mod binds;
 pub mod canvas;
 pub mod debug;
-pub mod decorations; // rice
+pub mod decorations; // ashd
 pub mod error;
 pub mod gestures;
 pub mod input;
@@ -54,7 +54,7 @@ pub use crate::debug::Debug;
 pub use crate::decorations::{
     CanvasDecor, CanvasGrid, CanvasRegion, FocusRingCanvasStyle, TitleBar, TitleBarPart, WorkArea,
     WorkAreaPart,
-}; // rice
+}; // ashd
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};

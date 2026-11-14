@@ -1,4 +1,4 @@
-//! rice: pointer input to windows on a zoomed canvas.
+//! ashd: pointer input to windows on a zoomed canvas.
 
 use client::{ClientId, PointerEvent};
 use niri_config::Config;

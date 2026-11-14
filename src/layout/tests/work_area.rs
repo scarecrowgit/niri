@@ -1,4 +1,4 @@
-//! rice: tests for the working area outline and clip.
+//! ashd: tests for the working area outline and clip.
 
 use niri_config::{CanvasRegion, WorkArea};
 

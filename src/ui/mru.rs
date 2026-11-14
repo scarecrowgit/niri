@@ -582,7 +582,7 @@ impl WindowMru {
         let config = niri.config.borrow().recent_windows.previews;
         let mut thumbnails = Vec::new();
         for (mon, ws_idx, ws) in niri.layout.workspaces() {
-            // rice: windows on hidden (scratchpad) workspaces are not in the switcher.
+            // ashd: windows on hidden (scratchpad) workspaces are not in the switcher.
             if ws.is_hidden() {
                 continue;
             }

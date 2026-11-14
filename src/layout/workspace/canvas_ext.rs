@@ -1,4 +1,4 @@
-//! rice: canvas mode of a workspace.
+//! ashd: canvas mode of a workspace.
 //!
 //! See `crate::layout::canvas` for the coordinate model. This child module of `workspace` holds
 //! all new `impl Workspace` methods so that `workspace.rs` itself only carries short, marked
@@ -618,7 +618,7 @@ impl<W: LayoutElement> Workspace<W> {
         let frame_zoom = if self.is_canvas() { transform.zoom } else { 1. };
         let zoom_settled =
             !self.canvas.view.is_zoom_animating() && self.canvas.zoom_gesture.is_none();
-        // rice: tiles get their canvas options (decorations) as soon as the mode changes.
+        // ashd: tiles get their canvas options (decorations) as soon as the mode changes.
         let mode_changed = self.floating.options().canvas_tile_zoom.is_some() != self.is_canvas();
         if (zoom_settled && frame_zoom != self.canvas.frame_zoom) || mode_changed {
             if zoom_settled {
@@ -643,7 +643,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
 
         let mut adjusted = Options::clone(options);
-        // rice: canvas tiles know the settled zoom (focus style, crisp title text).
+        // ashd: canvas tiles know the settled zoom (focus style, crisp title text).
         adjusted.canvas_tile_zoom = Some(zoom);
         if zoom < 1. {
             let scale = self.scale.fractional_scale();

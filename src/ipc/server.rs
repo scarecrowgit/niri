@@ -51,12 +51,12 @@ pub struct IpcServer {
     pub socket_path: Option<PathBuf>,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
-    /// rice: output frame (`frame_callback_sequence`) in which the last canvas/strip view event
+    /// ashd: output frame (`frame_callback_sequence`) in which the last canvas/strip view event
     /// was sent for a workspace, to send animated view changes at most once per frame.
     view_event_frames: RefCell<ViewEventFrames>,
 }
 
-/// rice: per-workspace output frame of the last sent view event.
+/// ashd: per-workspace output frame of the last sent view event.
 #[derive(Debug, Default)]
 struct ViewEventFrames {
     canvas: HashMap<u64, Option<u32>>,
@@ -471,7 +471,7 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let casts = state.casts.casts.values().cloned().collect();
             Response::Casts(casts)
         }
-        // rice: live canvas views (the event stream state may lag by up to a frame).
+        // ashd: live canvas views (the event stream state may lag by up to a frame).
         Request::CanvasViews => {
             let (tx, rx) = async_channel::bounded(1);
             ctx.event_loop.insert_idle(move |state| {
@@ -563,7 +563,7 @@ fn make_ipc_window(
     })
 }
 
-/// rice: view state of a canvas-mode workspace.
+/// ashd: view state of a canvas-mode workspace.
 fn canvas_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<CanvasViewState> {
     let view = ws.canvas_view()?;
     let current = view.current();
@@ -590,7 +590,7 @@ fn canvas_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<CanvasViewState> {
     })
 }
 
-/// rice: scroll state of a strip-mode workspace.
+/// ashd: scroll state of a strip-mode workspace.
 fn strip_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<StripViewState> {
     if ws.is_canvas() {
         return None;
@@ -605,7 +605,7 @@ fn strip_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<StripViewState> {
     })
 }
 
-/// rice: canvas views of all canvas workspaces with the output each one is on.
+/// ashd: canvas views of all canvas workspaces with the output each one is on.
 fn canvas_view_states(
     layout: &Layout<Mapped>,
 ) -> Vec<(CanvasViewState, Option<smithay::output::Output>)> {
@@ -618,7 +618,7 @@ fn canvas_view_states(
         .collect()
 }
 
-/// rice: decides whether a view event is sent now.
+/// ashd: decides whether a view event is sent now.
 ///
 /// Changes that only advance an animation or a gesture are sent at most once per output frame;
 /// the first state, a settling animation, and changes of the view size or column layout always go
@@ -690,7 +690,7 @@ impl State {
         self.ipc_refresh_workspaces();
         self.ipc_refresh_windows();
         self.ipc_refresh_overview();
-        // rice: canvas and strip view state.
+        // ashd: canvas and strip view state.
         self.ipc_refresh_canvas_views();
         self.ipc_refresh_strip_views();
     }
@@ -700,7 +700,7 @@ impl State {
         Some(state.frame_callback_sequence)
     }
 
-    /// rice: sends canvas view changes.
+    /// ashd: sends canvas view changes.
     fn ipc_refresh_canvas_views(&mut self) {
         let Some(server) = &self.niri.ipc_server else {
             return;
@@ -757,7 +757,7 @@ impl State {
         }
     }
 
-    /// rice: sends strip (scrolling layout) view changes.
+    /// ashd: sends strip (scrolling layout) view changes.
     fn ipc_refresh_strip_views(&mut self) {
         let Some(server) = &self.niri.ipc_server else {
             return;
@@ -846,9 +846,9 @@ impl State {
             };
 
             // Check for any changes that we can't signal as individual events.
-            // rice: including the hidden flag.
+            // ashd: including the hidden flag.
             let output_name = mon.map(|mon| mon.output_name());
-            // rice: visual index, 0 for hidden workspaces.
+            // ashd: visual index, 0 for hidden workspaces.
             if ipc_ws.idx != layout.ipc_workspace_idx(mon, ws_idx)
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
@@ -858,7 +858,7 @@ impl State {
                 break;
             }
 
-            // rice: mode changes have their own event.
+            // ashd: mode changes have their own event.
             let mode = ws.mode();
             if ipc_ws.mode != mode {
                 events.push(Event::WorkspaceModeChanged { id, mode });
@@ -906,15 +906,15 @@ impl State {
                     let id = ws.id().get();
                     Workspace {
                         id,
-                        idx: layout.ipc_workspace_idx(mon, ws_idx), // rice
+                        idx: layout.ipc_workspace_idx(mon, ws_idx), // ashd
                         name: ws.name().cloned(),
                         output: mon.map(|mon| mon.output_name().clone()),
                         is_urgent: ws.is_urgent(),
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,
                         active_window_id: ws.active_window().map(|win| win.id().get()),
-                        mode: ws.mode(),           // rice
-                        is_hidden: ws.is_hidden(), // rice
+                        mode: ws.mode(),           // ashd
+                        is_hidden: ws.is_hidden(), // ashd
                     }
                 })
                 .collect();
@@ -943,7 +943,7 @@ impl State {
 
         let mut batch_change_layouts: Vec<(u64, WindowLayout)> = Vec::new();
 
-        // rice: where the windows on hidden (scratchpad) workspaces were hidden from.
+        // ashd: where the windows on hidden (scratchpad) workspaces were hidden from.
         let hidden_from: HashMap<smithay::desktop::Window, Option<u64>> = layout
             .hidden_windows()
             .into_iter()
@@ -961,7 +961,7 @@ impl State {
                 focused_id = Some(id);
             }
 
-            let hidden_from = hidden_from.get(&mapped.window).copied().flatten(); // rice
+            let hidden_from = hidden_from.get(&mapped.window).copied().flatten(); // ashd
 
             let Some(ipc_win) = state.windows.get(&id) else {
                 let window = make_ipc_window(mapped, ws_id, window_layout, hidden_from);
@@ -972,7 +972,7 @@ impl State {
             let workspace_id = ws_id.map(|id| id.get());
             let mut changed =
                 ipc_win.workspace_id != workspace_id || ipc_win.is_floating != mapped.is_floating();
-            changed |= ipc_win.hidden_from_workspace_id != hidden_from; // rice
+            changed |= ipc_win.hidden_from_workspace_id != hidden_from; // ashd
 
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id

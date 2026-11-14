@@ -27,12 +27,12 @@ pub struct Layout {
     pub struts: Struts,
     pub background_color: Color,
     pub fullscreen_backdrop_color: Color,
-    // rice: infinite canvas workspace mode.
+    // ashd: infinite canvas workspace mode.
     pub default_workspace_mode: WorkspaceMode,
     pub canvas: Canvas,
-    // rice: compositor-drawn title strips.
+    // ashd: compositor-drawn title strips.
     pub title_bar: TitleBar,
-    // rice: working area outline and clip.
+    // ashd: working area outline and clip.
     pub work_area: WorkArea,
 }
 
@@ -84,9 +84,9 @@ impl MergeWith<LayoutPart> for Layout {
             empty_workspace_above_first,
             gaps,
             canvas,
-            title_bar, // rice
-            work_area, // rice
-            struts,    // rice: per side
+            title_bar, // ashd
+            work_area, // ashd
+            struts,    // ashd: per side
         );
 
         merge_clone!(
@@ -142,22 +142,22 @@ pub struct LayoutPart {
     pub default_column_display: Option<ColumnDisplay>,
     #[knuffel(child, unwrap(argument))]
     pub gaps: Option<FloatOrInt<0, 65535>>,
-    // rice: merged per side.
+    // ashd: merged per side.
     #[knuffel(child)]
     pub struts: Option<StrutsPart>,
     #[knuffel(child)]
     pub background_color: Option<Color>,
     #[knuffel(child)]
     pub fullscreen_backdrop_color: Option<Color>,
-    // rice: infinite canvas workspace mode.
+    // ashd: infinite canvas workspace mode.
     #[knuffel(child, unwrap(argument, str))]
     pub default_workspace_mode: Option<WorkspaceMode>,
     #[knuffel(child)]
     pub canvas: Option<CanvasPart>,
-    // rice: compositor-drawn title strips.
+    // ashd: compositor-drawn title strips.
     #[knuffel(child)]
     pub title_bar: Option<TitleBarPart>,
-    // rice: working area outline and clip.
+    // ashd: working area outline and clip.
     #[knuffel(child)]
     pub work_area: Option<WorkAreaPart>,
 }
@@ -192,7 +192,7 @@ pub struct Struts {
     pub bottom: FloatOrInt<-65535, 65535>,
 }
 
-/// rice: one `struts {}` section as parsed from the config.
+/// ashd: one `struts {}` section as parsed from the config.
 ///
 /// Struts merge per side: a later `struts {}` block (another included file, or a per-output or
 /// per-workspace `layout {}`) only overrides the sides it names, so a theme file can set `top`
@@ -276,7 +276,7 @@ where
     }
 }
 
-// rice: struts merge per side.
+// ashd: struts merge per side.
 #[cfg(test)]
 mod struts_tests {
     use std::path::PathBuf;

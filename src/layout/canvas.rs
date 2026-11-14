@@ -1,4 +1,4 @@
-//! rice: infinite canvas view for canvas-mode workspaces.
+//! ashd: infinite canvas view for canvas-mode workspaces.
 //!
 //! A canvas-mode workspace keeps all of its normal windows in its `FloatingSpace`, switched into
 //! *unbounded* mode where tile positions are logical coordinates on an infinite 2D plane. The
@@ -459,9 +459,9 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) pan_gesture: Option<CanvasPanGesture>,
     /// Zoom at the start of an ongoing pinch zoom gesture.
     pub(super) zoom_gesture: Option<f64>,
-    /// rice: plane grid and named regions (runtime regions and render state).
+    /// ashd: plane grid and named regions (runtime regions and render state).
     pub(super) decor: super::canvas_grid::CanvasDecorations,
-    /// rice: working area outline and clip (not canvas-specific; per-workspace rice state).
+    /// ashd: working area outline and clip (not canvas-specific; per-workspace ashd state).
     pub(super) work_area: super::work_area::WorkAreaDecor,
 }
 
@@ -490,8 +490,8 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             cascade: None,
             pan_gesture: None,
             zoom_gesture: None,
-            decor: Default::default(),     // rice
-            work_area: Default::default(), // rice
+            decor: Default::default(),     // ashd
+            work_area: Default::default(), // ashd
         }
     }
 }
@@ -824,7 +824,7 @@ impl<W: LayoutElement> Layout<W> {
     }
 }
 
-/// rice: zoom of an interactively moved tile, animated when it moves between workspaces with
+/// ashd: zoom of an interactively moved tile, animated when it moves between workspaces with
 /// different zooms.
 #[derive(Debug)]
 pub struct MoveZoom {

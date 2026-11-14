@@ -1,4 +1,4 @@
-//! rice: explicit window-focus actions take the keyboard back from an on-demand layer surface.
+//! ashd: explicit window-focus actions take the keyboard back from an on-demand layer surface.
 //!
 //! A layer surface with on-demand keyboard interactivity keeps the keyboard focus after it was
 //! clicked (`Niri::layer_shell_on_demand_focus`) until something else is clicked or an action

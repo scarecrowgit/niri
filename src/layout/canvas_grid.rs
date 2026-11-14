@@ -1,4 +1,4 @@
-//! rice: canvas plane decorations: the grid background and named regions.
+//! ashd: canvas plane decorations: the grid background and named regions.
 //!
 //! Both are drawn in workspace view coordinates under all windows of a canvas workspace, from
 //! the current [`CanvasTransform`], so they pan and zoom exactly with the plane. Strip

@@ -1,4 +1,4 @@
-//! rice: tests for compositor-drawn title strips, the focus ring gap, canvas focus styles and
+//! ashd: tests for compositor-drawn title strips, the focus ring gap, canvas focus styles and
 //! canvas regions.
 
 use niri_config::{CanvasRegion, FocusRingCanvasStyle};
@@ -365,7 +365,7 @@ fn canvas_regions_runtime_changes() {
     assert_eq!(ws.canvas_visible_region_names(), ["near"]);
 }
 
-// rice: window-rule border widths are compensated under the canvas zoom like the layout ones.
+// ashd: window-rule border widths are compensated under the canvas zoom like the layout ones.
 #[test]
 fn canvas_compensates_window_rule_border_width() {
     let mut options = Options::default();
@@ -395,7 +395,7 @@ fn canvas_compensates_window_rule_border_width() {
     assert_eq!(tile(&layout, 1).effective_border_width(), Some(2.));
 }
 
-// rice: the tab indicator sits outside a focus ring with a gap.
+// ashd: the tab indicator sits outside a focus ring with a gap.
 #[test]
 fn tab_indicator_moves_out_past_the_ring_gap() {
     let mut options = Options::default();

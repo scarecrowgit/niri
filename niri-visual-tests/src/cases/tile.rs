@@ -55,7 +55,7 @@ impl Tile {
         rv
     }
 
-    /// rice: title strip and a focus ring 4 px outside the window.
+    /// ashd: title strip and a focus ring 4 px outside the window.
     pub fn title_bar_with_ring_gap(args: Args) -> Self {
         let window = TestWindow::freeform(0);
         let options = Options {

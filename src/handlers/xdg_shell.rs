@@ -959,12 +959,12 @@ impl XdgShellHandler for State {
 
     fn app_id_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
-        self.redraw_title_bar(&toplevel); // rice
+        self.redraw_title_bar(&toplevel); // ashd
     }
 
     fn title_changed(&mut self, toplevel: ToplevelSurface) {
         self.update_window_rules(&toplevel);
-        self.redraw_title_bar(&toplevel); // rice
+        self.redraw_title_bar(&toplevel); // ashd
     }
 
     fn parent_changed(&mut self, toplevel: ToplevelSurface) {
@@ -1439,7 +1439,7 @@ impl State {
         }
     }
 
-    /// rice: compositor-drawn title bars show the title and app id.
+    /// ashd: compositor-drawn title bars show the title and app id.
     fn redraw_title_bar(&mut self, toplevel: &ToplevelSurface) {
         if self.niri.config.borrow().layout.title_bar.off {
             return;

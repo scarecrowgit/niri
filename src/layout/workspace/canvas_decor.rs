@@ -1,4 +1,4 @@
-//! rice: canvas plane grid and named regions of a workspace (see `crate::layout::canvas_grid`).
+//! ashd: canvas plane grid and named regions of a workspace (see `crate::layout::canvas_grid`).
 
 use niri_config::CanvasRegion;
 

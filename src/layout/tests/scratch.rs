@@ -1,4 +1,4 @@
-//! rice: tests for hidden (scratchpad) workspaces.
+//! ashd: tests for hidden (scratchpad) workspaces.
 
 use super::*;
 use crate::layout::canvas::rect_center;

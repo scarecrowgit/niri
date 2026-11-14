@@ -75,22 +75,22 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
-// rice: infinite canvas workspace mode.
+// ashd: infinite canvas workspace mode.
 pub mod canvas;
-pub mod canvas_grid; // rice
+pub mod canvas_grid; // ashd
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
-pub mod scratch; // rice
+pub mod scratch; // ashd
 pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
 pub mod tile;
-pub mod title_bar; // rice
-pub mod work_area; // rice
+pub mod title_bar; // ashd
+pub mod work_area; // ashd
 pub mod workspace;
 
 #[cfg(test)]
@@ -344,7 +344,7 @@ pub trait LayoutElement {
 
     fn on_commit(&mut self, serial: Serial);
 
-    /// rice: title and subtitle (app id) shown in the compositor-drawn title bar.
+    /// ashd: title and subtitle (app id) shown in the compositor-drawn title bar.
     fn title_bar_text(&self) -> (Option<String>, Option<String>) {
         (None, None)
     }
@@ -415,7 +415,7 @@ pub struct Options {
     pub disable_resize_throttling: bool,
     pub disable_transactions: bool,
     pub deactivate_unfocused_windows: bool,
-    /// rice: settled canvas zoom, set only in the options of tiles on a canvas plane.
+    /// ashd: settled canvas zoom, set only in the options of tiles on a canvas plane.
     pub canvas_tile_zoom: Option<f64>,
 }
 
@@ -465,7 +465,7 @@ struct InteractiveMoveData<W: LayoutElement> {
     /// config overrides for the workspace where the move originated from. As soon as the window
     /// moves over some different workspace though, this override will reset.
     pub(self) workspace_config: Option<(WorkspaceId, niri_config::LayoutPart)>,
-    /// rice: zoom the tile is drawn at (the zoom of the canvas under the pointer, animated).
+    /// ashd: zoom the tile is drawn at (the zoom of the canvas under the pointer, animated).
     pub(self) canvas_zoom: canvas::MoveZoom,
 }
 
@@ -562,7 +562,7 @@ pub enum HitType {
         /// Whether the hit was on the tab indicator.
         is_tab_indicator: bool,
     },
-    /// rice: the hit is within the input region of a window drawn scaled by `zoom` (a zoomed
+    /// ashd: the hit is within the input region of a window drawn scaled by `zoom` (a zoomed
     /// canvas). Events can be sent to it; surface-local coordinates are
     /// `(pos - win_pos) / zoom`.
     ScaledInput {
@@ -571,7 +571,7 @@ pub enum HitType {
         /// Scale the window is drawn at; never exactly 1.
         zoom: f64,
     },
-    /// rice: the hit is on the compositor-drawn title bar of a window: pressing activates the
+    /// ashd: the hit is on the compositor-drawn title bar of a window: pressing activates the
     /// window, dragging moves it.
     TitleBar,
 }
@@ -664,8 +664,8 @@ impl HitType {
         match &mut self {
             HitType::Input { win_pos } => *win_pos += offset,
             HitType::Activate { .. } => (),
-            HitType::TitleBar => (), // rice
-            HitType::ScaledInput { win_pos, .. } => *win_pos += offset, // rice
+            HitType::TitleBar => (), // ashd
+            HitType::ScaledInput { win_pos, .. } => *win_pos += offset, // ashd
         }
         self
     }
@@ -686,11 +686,11 @@ impl HitType {
                 is_tab_indicator: false,
             },
             HitType::Activate { .. } => self,
-            HitType::TitleBar => self, // rice: title bars stay draggable through any zoom.
+            HitType::TitleBar => self, // ashd: title bars stay draggable through any zoom.
         }
     }
 
-    /// rice: turns an `Input` hit on a tile drawn scaled by `zoom` (around the origin of the
+    /// ashd: turns an `Input` hit on a tile drawn scaled by `zoom` (around the origin of the
     /// coordinates `win_pos` is in) into a hit in the scaled coordinates.
     pub fn scaled(self, zoom: f64) -> Self {
         match self {
@@ -718,7 +718,7 @@ impl Options {
             disable_resize_throttling: config.debug.disable_resize_throttling,
             disable_transactions: config.debug.disable_transactions,
             deactivate_unfocused_windows: config.debug.deactivate_unfocused_windows,
-            canvas_tile_zoom: None, // rice
+            canvas_tile_zoom: None, // ashd
         }
     }
 
@@ -865,7 +865,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
 
                     let source = &mut monitors[source_idx];
-                    source.ensure_active_visible(); // rice
+                    source.ensure_active_visible(); // ashd
 
                     // If we stopped a workspace switch, then we might need to clean up workspaces.
                     // Also if empty_workspace_above_first is set and there are only 2 workspaces
@@ -1396,7 +1396,7 @@ impl<W: LayoutElement> Layout<W> {
         reference: WorkspaceReference,
     ) -> Option<&mut Workspace<W>> {
         if let WorkspaceReference::Index(index) = reference {
-            // rice: indices count the visible workspaces only.
+            // ashd: indices count the visible workspaces only.
             let index = self.resolve_workspace_index(None, index);
             self.active_monitor()
                 .and_then(|m| m.workspaces.get_mut(index))
@@ -1632,7 +1632,7 @@ impl<W: LayoutElement> Layout<W> {
         for (monitor_idx, mon) in monitors.iter_mut().enumerate() {
             for (workspace_idx, ws) in mon.workspaces.iter_mut().enumerate() {
                 if ws.activate_window(window) {
-                    // rice: windows on hidden workspaces can't be focused by activation.
+                    // ashd: windows on hidden workspaces can't be focused by activation.
                     if ws.is_hidden() {
                         return;
                     }
@@ -1641,7 +1641,7 @@ impl<W: LayoutElement> Layout<W> {
 
                     // If currently in the middle of a vertical swipe between the target workspace
                     // and some other, don't switch the workspace.
-                    // rice: gesture indices are visual.
+                    // ashd: gesture indices are visual.
                     let visual_idx = mon.visual_idx(workspace_idx) as f64;
                     match &mon.workspace_switch {
                         Some(WorkspaceSwitch::Gesture(gesture))
@@ -1675,7 +1675,7 @@ impl<W: LayoutElement> Layout<W> {
         for (monitor_idx, mon) in monitors.iter_mut().enumerate() {
             for (workspace_idx, ws) in mon.workspaces.iter_mut().enumerate() {
                 if ws.activate_window_without_raising(window) {
-                    // rice: windows on hidden workspaces can't be focused by activation.
+                    // ashd: windows on hidden workspaces can't be focused by activation.
                     if ws.is_hidden() {
                         return;
                     }
@@ -1684,7 +1684,7 @@ impl<W: LayoutElement> Layout<W> {
 
                     // If currently in the middle of a vertical swipe between the target workspace
                     // and some other, don't switch the workspace.
-                    // rice: gesture indices are visual.
+                    // ashd: gesture indices are visual.
                     let visual_idx = mon.visual_idx(workspace_idx) as f64;
                     match &mon.workspace_switch {
                         Some(WorkspaceSwitch::Gesture(gesture))
@@ -2427,7 +2427,7 @@ impl<W: LayoutElement> Layout<W> {
     ) -> Option<(&W, HitType)> {
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if move_.output == *output {
-                // rice: over a canvas the tile is drawn at the canvas zoom.
+                // ashd: over a canvas the tile is drawn at the canvas zoom.
                 let canvas_zoom = self.interactive_move_canvas_zoom(move_);
                 if self.overview_progress.is_some() {
                     let zoom = self.overview_zoom() * canvas_zoom;
@@ -2439,7 +2439,7 @@ impl<W: LayoutElement> Layout<W> {
                         HitType::hit_tile(&move_.tile, Point::from((0., 0.)), pos_within_tile)?;
                     Some((win, hit.to_activate()))
                 } else if canvas_zoom != 1. {
-                    // rice: scaled input, like the canvas windows themselves.
+                    // ashd: scaled input, like the canvas windows themselves.
                     let tile_pos = move_.tile_render_location(canvas_zoom);
                     let pos_within_tile = (pos_within_output - tile_pos).downscale(canvas_zoom);
                     let (win, hit) =
@@ -2715,7 +2715,7 @@ impl<W: LayoutElement> Layout<W> {
 
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             move_.tile.advance_animations();
-            move_.canvas_zoom.advance(); // rice
+            move_.canvas_zoom.advance(); // ashd
 
             if dnd_scroll.is_none() {
                 dnd_scroll = Some((
@@ -2852,7 +2852,7 @@ impl<W: LayoutElement> Layout<W> {
 
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if output.is_none_or(|output| *output == move_.output) {
-                // rice: also while its zoom animates.
+                // ashd: also while its zoom animates.
                 if move_.tile.are_animations_ongoing() || move_.canvas_zoom.is_animating() {
                     return true;
                 }
@@ -3070,7 +3070,7 @@ impl<W: LayoutElement> Layout<W> {
             let Some(name) = ws.name() else { continue };
             if let Some(config) = config.workspaces.iter().find(|w| &w.name.0 == name) {
                 ws.update_layout_config(config.layout.clone().map(|x| x.0));
-                ws.set_hidden(config.hidden); // rice
+                ws.set_hidden(config.hidden); // ashd
             }
         }
 
@@ -3957,7 +3957,7 @@ impl<W: LayoutElement> Layout<W> {
             return false;
         }
 
-        // rice: canvas tiles are additionally scaled by the canvas zoom.
+        // ashd: canvas tiles are additionally scaled by the canvas zoom.
         let zoom = mon.overview_zoom() * ws.canvas_zoom();
 
         let is_floating = ws.is_floating(&window_id);
@@ -3972,7 +3972,7 @@ impl<W: LayoutElement> Layout<W> {
         let pointer_offset_within_window =
             start_pos_within_output - tile_pos - window_offset.upscale(zoom);
         let window_size = tile.window_size().upscale(zoom);
-        // rice: a drag that starts on the title strip (above the window) keeps the grab point,
+        // ashd: a drag that starts on the title strip (above the window) keeps the grab point,
         // instead of making the window jump so that its top edge is under the pointer.
         let min_ratio_y = if tile.title_bar_rect().is_some() {
             -window_offset.y * zoom / window_size.h
@@ -4100,7 +4100,7 @@ impl<W: LayoutElement> Layout<W> {
                             .unwrap();
 
                         let zoom = mon.overview_zoom();
-                        // rice: canvas tiles are additionally scaled by the canvas zoom.
+                        // ashd: canvas tiles are additionally scaled by the canvas zoom.
                         let tile_zoom = zoom * ws.canvas_zoom();
                         tile_pos = Some((ws_geo.loc + tile_offset.upscale(tile_zoom), zoom));
                     }
@@ -4168,14 +4168,14 @@ impl<W: LayoutElement> Layout<W> {
                     pointer_ratio_within_window,
                     output_config,
                     workspace_config,
-                    canvas_zoom: canvas::MoveZoom::default(), // rice
+                    canvas_zoom: canvas::MoveZoom::default(), // ashd
                 };
-                // rice: starts at the zoom of the workspace it is on, without animation.
+                // ashd: starts at the zoom of the workspace it is on, without animation.
                 data.canvas_zoom =
                     canvas::MoveZoom::settled(self.interactive_move_canvas_zoom_target(&data));
 
                 if let Some((tile_pos, zoom)) = tile_pos {
-                    // rice: the tile is drawn at the zoom of the workspace under the pointer.
+                    // ashd: the tile is drawn at the zoom of the workspace under the pointer.
                     let zoom = zoom * self.interactive_move_canvas_zoom(&data);
                     let new_tile_pos = data.tile_render_location(zoom);
                     data.tile
@@ -4235,7 +4235,7 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 move_.pointer_pos_within_output = pointer_pos_within_output;
-                self.interactive_move_retarget_zoom(&mut move_); // rice
+                self.interactive_move_retarget_zoom(&mut move_); // ashd
 
                 self.interactive_move = Some(InteractiveMoveState::Moving(move_));
             }
@@ -4297,7 +4297,7 @@ impl<W: LayoutElement> Layout<W> {
         let Some(InteractiveMoveState::Moving(mut move_)) = self.interactive_move.take() else {
             unreachable!()
         };
-        let move_canvas_zoom = self.interactive_move_canvas_zoom_target(&move_); // rice
+        let move_canvas_zoom = self.interactive_move_canvas_zoom_target(&move_); // ashd
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();
@@ -4376,7 +4376,7 @@ impl<W: LayoutElement> Layout<W> {
                     };
 
                 let win_id = move_.tile.window().id().clone();
-                // rice: over a canvas the tile is drawn at the canvas zoom.
+                // ashd: over a canvas the tile is drawn at the canvas zoom.
                 let tile_render_loc = move_.tile_render_location(zoom * move_canvas_zoom);
 
                 let ws_idx = match insert_ws {
@@ -4473,13 +4473,13 @@ impl<W: LayoutElement> Layout<W> {
                 let (tile, tile_offset, ws_geo, canvas_zoom) = mon
                     .workspaces_with_render_geo_mut(false)
                     .find_map(|(ws, geo)| {
-                        let canvas_zoom = ws.canvas_zoom(); // rice
+                        let canvas_zoom = ws.canvas_zoom(); // ashd
                         ws.tiles_with_render_positions_mut(false)
                             .find(|(tile, _)| tile.window().id() == &win_id)
                             .map(|(tile, tile_offset)| (tile, tile_offset, geo, canvas_zoom))
                     })
                     .unwrap();
-                // rice: canvas tiles are additionally scaled by the canvas zoom.
+                // ashd: canvas tiles are additionally scaled by the canvas zoom.
                 let zoom = zoom * canvas_zoom;
                 let new_tile_render_loc = ws_geo.loc + tile_offset.upscale(zoom);
 
@@ -4686,7 +4686,7 @@ impl<W: LayoutElement> Layout<W> {
             (monitor, index)
         };
 
-        // rice: `new_idx` is a visual index (hidden workspaces don't count).
+        // ashd: `new_idx` is a visual index (hidden workspaces don't count).
         let new_idx = scratch::real_ws_idx(&monitor.workspaces, new_idx);
         monitor.move_workspace_to_idx(old_idx, new_idx);
     }
@@ -4994,7 +4994,7 @@ impl<W: LayoutElement> Layout<W> {
         }
 
         let scale = Scale::from(move_.output.current_scale().fractional_scale());
-        // rice: over a canvas the tile is drawn at the canvas zoom.
+        // ashd: over a canvas the tile is drawn at the canvas zoom.
         let zoom = self.overview_zoom() * self.interactive_move_canvas_zoom(move_);
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);

@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 pub mod socket;
 pub mod state;
 
-// rice: infinite canvas workspace mode types.
+// ashd: infinite canvas workspace mode types.
 pub mod canvas;
 pub use canvas::{CanvasRegion, CanvasViewState, StripViewState, WorkspaceMode};
 
@@ -123,7 +123,7 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
-    /// Request the view state of every canvas-mode workspace (rice fork).
+    /// Request the view state of every canvas-mode workspace (ashd fork).
     CanvasViews,
 }
 
@@ -171,7 +171,7 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
-    /// View state of every canvas-mode workspace (rice fork).
+    /// View state of every canvas-mode workspace (ashd fork).
     CanvasViews(Vec<CanvasViewState>),
 }
 
@@ -249,14 +249,14 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
-        /// rice: whether to copy the screenshot to the clipboard.
+        /// ashd: whether to copy the screenshot to the clipboard.
         ///
         /// Missing in old requests: `true`.
         #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         copy_to_clipboard: bool,
 
-        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        /// ashd: whether to show niri's "Screenshot captured" desktop notification.
         ///
         /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
         #[serde(default = "default_true")]
@@ -284,14 +284,14 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
-        /// rice: whether to copy the screenshot to the clipboard.
+        /// ashd: whether to copy the screenshot to the clipboard.
         ///
         /// Missing in old requests: `true`.
         #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         copy_to_clipboard: bool,
 
-        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        /// ashd: whether to show niri's "Screenshot captured" desktop notification.
         ///
         /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
         #[serde(default = "default_true")]
@@ -328,14 +328,14 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
-        /// rice: whether to copy the screenshot to the clipboard.
+        /// ashd: whether to copy the screenshot to the clipboard.
         ///
         /// Missing in old requests: `true`.
         #[serde(default = "default_true")]
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
         copy_to_clipboard: bool,
 
-        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        /// ashd: whether to show niri's "Screenshot captured" desktop notification.
         ///
         /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
         #[serde(default = "default_true")]
@@ -1081,7 +1081,7 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         path: Option<String>,
     },
-    // rice: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
+    // ashd: infinite canvas actions. Canvas-only actions are no-ops on strip workspaces.
     /// Toggle the focused workspace between strip (scrolling) and canvas mode.
     ToggleWorkspaceMode {},
     /// Set the window arrangement mode of the focused workspace.
@@ -1112,7 +1112,7 @@ pub enum Action {
         /// Keep the plane point under the cursor fixed (canvas under the cursor), instead of
         /// the centre of the focused canvas.
         #[cfg_attr(feature = "clap", arg(long))]
-        #[serde(default)] // rice
+        #[serde(default)] // ashd
         at_cursor: bool,
     },
     /// Zoom the canvas view out to the previous zoom step.
@@ -1120,7 +1120,7 @@ pub enum Action {
         /// Keep the plane point under the cursor fixed (canvas under the cursor), instead of
         /// the centre of the focused canvas.
         #[cfg_attr(feature = "clap", arg(long))]
-        #[serde(default)] // rice
+        #[serde(default)] // ashd
         at_cursor: bool,
     },
     /// Set the canvas zoom (clamped to the configured zoom-steps range).
@@ -1157,7 +1157,7 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
-    // rice: scratchpad (hidden workspace) actions.
+    // ashd: scratchpad (hidden workspace) actions.
     /// Move a window to the first hidden workspace of its monitor (scratchpad).
     ///
     /// The workspace the window came from is remembered (see
@@ -1187,7 +1187,7 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
-    // rice: named regions on the canvas plane of the focused workspace.
+    // ashd: named regions on the canvas plane of the focused workspace.
     /// Add a named region (dashed rectangle with a label) to the canvas plane of the focused
     /// workspace, or replace the region with this name.
     #[cfg_attr(
@@ -1643,7 +1643,7 @@ pub struct Window {
     ///
     /// The timestamp comes from the monotonic clock.
     pub focus_timestamp: Option<Timestamp>,
-    /// Id of the workspace this window was hidden from (rice fork).
+    /// Id of the workspace this window was hidden from (ashd fork).
     ///
     /// Set while the window is on a hidden (scratchpad) workspace and the compositor knows where
     /// it came from; `unhide-window` moves it back there.
@@ -1705,14 +1705,14 @@ pub struct WindowLayout {
     /// the distance from the corner of the black backdrop to the corner of the (centered) window
     /// contents.
     pub window_offset_in_tile: (f64, f64),
-    /// Position of the tile's top-left corner on the canvas plane (rice fork).
+    /// Position of the tile's top-left corner on the canvas plane (ashd fork).
     ///
     /// Set for windows on the plane of a canvas-mode workspace; the size on the plane is
     /// [`Self::tile_size`] (plane units are unscaled logical pixels). This does not change while
     /// the canvas view pans or zooms.
     #[serde(default)]
     pub pos_in_canvas: Option<(f64, f64)>,
-    /// Whether this canvas window is pinned to the screen (rice fork).
+    /// Whether this canvas window is pinned to the screen (ashd fork).
     #[serde(default)]
     pub is_pinned: bool,
 }
@@ -1748,7 +1748,7 @@ pub struct Workspace {
     ///
     /// If you need a unique workspace id that doesn't change, see [`Self::id`].
     ///
-    /// rice: the index counts only the visible workspaces of the monitor (1…n). Hidden
+    /// ashd: the index counts only the visible workspaces of the monitor (1…n). Hidden
     /// (scratchpad) workspaces, see [`Self::is_hidden`], have `idx` 0 and can only be referenced
     /// by name or id.
     pub idx: u8,
@@ -1770,13 +1770,13 @@ pub struct Workspace {
     pub is_focused: bool,
     /// Id of the active window on this workspace, if any.
     pub active_window_id: Option<u64>,
-    /// Window arrangement mode of this workspace (rice fork).
+    /// Window arrangement mode of this workspace (ashd fork).
     ///
     /// Defaults to [`WorkspaceMode::Strip`] when absent, so replies from servers without canvas
     /// support still parse.
     #[serde(default)]
     pub mode: WorkspaceMode,
-    /// Whether this is a hidden (scratchpad) workspace (rice fork).
+    /// Whether this is a hidden (scratchpad) workspace (ashd fork).
     ///
     /// Hidden workspaces never become active through navigation and are not shown in the
     /// overview; their windows are the scratchpad.
@@ -2072,14 +2072,14 @@ pub enum Event {
         /// disabled in hardware, or via `input { touchpad { off; } }`—this is not reflected here.
         on: bool,
     },
-    /// The window arrangement mode of a workspace changed (rice fork).
+    /// The window arrangement mode of a workspace changed (ashd fork).
     WorkspaceModeChanged {
         /// Id of the workspace.
         id: u64,
         /// The new mode.
         mode: WorkspaceMode,
     },
-    /// The set of canvas-mode workspaces or their views changed (rice fork).
+    /// The set of canvas-mode workspaces or their views changed (ashd fork).
     ///
     /// This completely replaces the previous canvas view state. You will receive it when
     /// connecting to the event stream, and whenever a workspace enters or leaves canvas mode or a
@@ -2088,7 +2088,7 @@ pub enum Event {
         /// View state of every canvas-mode workspace.
         views: Vec<CanvasViewState>,
     },
-    /// The view (pan/zoom) of a canvas workspace changed (rice fork).
+    /// The view (pan/zoom) of a canvas workspace changed (ashd fork).
     ///
     /// While the view animates this is sent at most once per frame of the workspace's output;
     /// the last event of an animation has `animating: false`.
@@ -2096,7 +2096,7 @@ pub enum Event {
         /// The new view state.
         view: CanvasViewState,
     },
-    /// The set of strip-mode workspaces or their scroll positions changed (rice fork).
+    /// The set of strip-mode workspaces or their scroll positions changed (ashd fork).
     ///
     /// This completely replaces the previous strip view state. You will receive it when
     /// connecting to the event stream, and whenever the set of strip-mode workspaces changes.
@@ -2104,7 +2104,7 @@ pub enum Event {
         /// Scroll state of every strip-mode workspace.
         views: Vec<StripViewState>,
     },
-    /// The scroll position (or column layout) of a strip-mode workspace changed (rice fork).
+    /// The scroll position (or column layout) of a strip-mode workspace changed (ashd fork).
     ///
     /// While the view animates this is sent at most once per frame of the workspace's output;
     /// the settled position is always sent. See [`StripViewState`] for the coordinates.
@@ -2506,7 +2506,7 @@ fn default_position_change() -> PositionChange {
 mod tests {
     use super::*;
 
-    // rice: quiet screenshots for the shell.
+    // ashd: quiet screenshots for the shell.
     #[test]
     fn screenshot_delivery_defaults_for_old_clients() {
         let old =
@@ -2610,7 +2610,7 @@ mod tests {
         assert!("10% ".parse::<PositionChange>().is_err());
     }
 
-    // rice: IPC additions must stay backwards compatible in both directions.
+    // ashd: IPC additions must stay backwards compatible in both directions.
 
     fn round_trip<T: Serialize + for<'de> Deserialize<'de>>(value: &T) -> T {
         let json = serde_json::to_string(value).unwrap();
@@ -2637,7 +2637,7 @@ mod tests {
         "is_urgent": false, "is_active": true, "is_focused": true, "active_window_id": null}"#;
 
     #[test]
-    fn old_payloads_without_rice_fields_parse() {
+    fn old_payloads_without_ashd_fields_parse() {
         let layout: WindowLayout = serde_json::from_str(OLD_WINDOW_LAYOUT).unwrap();
         assert_eq!(layout.pos_in_canvas, None);
         assert!(!layout.is_pinned);

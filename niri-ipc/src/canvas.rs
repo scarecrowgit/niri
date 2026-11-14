@@ -1,4 +1,4 @@
-//! Types for the rice fork's per-workspace infinite canvas mode.
+//! Types for the ashd fork's per-workspace infinite canvas mode.
 //!
 //! A workspace is either in [`WorkspaceMode::Strip`] (stock niri scrollable tiling) or in
 //! [`WorkspaceMode::Canvas`], where all normal windows float on an unbounded 2D plane and the

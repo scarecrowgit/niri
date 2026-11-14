@@ -1,4 +1,4 @@
-//! rice: pointer grab that pans a canvas workspace by direct manipulation.
+//! ashd: pointer grab that pans a canvas workspace by direct manipulation.
 //!
 //! Started by Mod+MMB anywhere on a canvas workspace and by Mod+LMB on the empty plane. The plane
 //! follows the pointer 1:1 (plane delta = view delta / zoom); on release the view glides on with

@@ -65,21 +65,21 @@ use crate::utils::{center, get_monotonic_time, CastSessionId, ResizeEdge};
 use crate::window::mapped::MappedId;
 
 pub mod backend_ext;
-pub mod canvas_actions; // rice
-pub mod canvas_pan_grab; // rice
+pub mod canvas_actions; // ashd
+pub mod canvas_pan_grab; // ashd
 pub mod click_grab;
-mod decor_actions; // rice
-mod layer_focus_hook; // rice
+mod decor_actions; // ashd
+mod layer_focus_hook; // ashd
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
 pub mod resize_grab;
-pub mod scratch_actions; // rice
+pub mod scratch_actions; // ashd
 pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
 pub mod spatial_movement_grab;
 pub mod swipe_tracker;
-mod title_bar_click; // rice
+mod title_bar_click; // ashd
 pub mod touch_overview_grab;
 
 use backend_ext::{NiriInputBackend as InputBackend, NiriInputDevice as _};
@@ -932,9 +932,9 @@ impl State {
             touch.cancel(self);
         }
 
-        // rice: remember the focus for canvas reveal / edge-push.
+        // ashd: remember the focus for canvas reveal / edge-push.
         let canvas_hook = canvas_actions::CanvasActionHook::new(&action, self);
-        // rice: explicit focus actions take the keyboard from an on-demand layer surface.
+        // ashd: explicit focus actions take the keyboard from an on-demand layer surface.
         let layer_focus_hook = layer_focus_hook::LayerFocusHook::new(&action, self);
 
         match action {
@@ -1746,7 +1746,7 @@ impl State {
             } => {
                 let id = MappedId::specific(id);
                 if let Some(window) = self.niri.find_window_by_id(id) {
-                    // rice: an index counts the visible workspaces of the window's monitor.
+                    // ashd: an index counts the visible workspaces of the window's monitor.
                     if let Some((output, index)) = self
                         .niri
                         .find_output_and_workspace_index_for(reference, Some(&window))
@@ -2825,7 +2825,7 @@ impl State {
                     self.niri.test_action_count += 1;
                 }
             }
-            // rice: mode-dependent action.
+            // ashd: mode-dependent action.
             Action::IfCanvas(mut actions) => {
                 let is_canvas = self
                     .niri
@@ -2838,7 +2838,7 @@ impl State {
                     self.do_action(action, allow_when_locked, time);
                 }
             }
-            // rice: infinite canvas actions.
+            // ashd: infinite canvas actions.
             action @ (Action::ToggleWorkspaceMode
             | Action::SetWorkspaceMode(_)
             | Action::CanvasPanLeft
@@ -2857,20 +2857,20 @@ impl State {
             | Action::ToggleWindowPinnedById(_)) => {
                 self.do_canvas_action(action);
             }
-            // rice: scratchpad actions.
+            // ashd: scratchpad actions.
             action @ (Action::HideWindow
             | Action::HideWindowById(_)
             | Action::UnhideWindow
             | Action::UnhideWindowById(_)) => {
                 self.do_scratch_action(action);
             }
-            // rice: named canvas regions.
+            // ashd: named canvas regions.
             action @ (Action::CanvasAddRegion(..) | Action::CanvasRemoveRegion(_)) => {
                 self.do_decor_action(action);
             }
         }
 
-        // rice: canvas reveal / edge-push after keyboard focus and move actions.
+        // ashd: canvas reveal / edge-push after keyboard focus and move actions.
         canvas_hook.finish(self);
         layer_focus_hook.finish(self);
     }
@@ -2966,7 +2966,7 @@ impl State {
                     return Some((output.clone(), true));
                 }
             } else if let Some(grab) = grab.downcast_ref::<CanvasPanGrab>() {
-                // rice: canvas panning wraps around both axes.
+                // ashd: canvas panning wraps around both axes.
                 return Some((grab.output().clone(), true));
             }
             None
@@ -3074,7 +3074,7 @@ impl State {
 
         self.niri.pointer_contents.clone_from(&under);
 
-        // rice: relative motion over a window drawn scaled is scaled down like the position.
+        // ashd: relative motion over a window drawn scaled is scaled down like the position.
         let rel_scale = under.scaled_input_zoom().unwrap_or(1.);
 
         pointer.motion(
@@ -3391,7 +3391,7 @@ impl State {
 
                 if let Some((output, ws)) = output_ws {
                     let ws_id = ws.id();
-                    let is_canvas = ws.is_canvas() && !is_overview_open; // rice
+                    let is_canvas = ws.is_canvas() && !is_overview_open; // ashd
 
                     self.niri.layout.focus_output(&output);
 
@@ -3401,7 +3401,7 @@ impl State {
                         button: button_code,
                         location,
                     };
-                    // rice: Mod+MMB on a canvas pans it in 2D.
+                    // ashd: Mod+MMB on a canvas pans it in 2D.
                     let canvas_grab = is_canvas
                         .then(|| {
                             CanvasPanGrab::new(self, start_data.clone(), output.clone(), ws_id)
@@ -3426,7 +3426,7 @@ impl State {
                 }
             }
 
-            // rice: pressing a compositor-drawn title bar activates and drags the window.
+            // ashd: pressing a compositor-drawn title bar activates and drags the window.
             if button == Some(MouseButton::Left)
                 && !pointer.is_grabbed()
                 && !is_overview_open
@@ -3542,7 +3542,7 @@ impl State {
                     }
                 }
 
-                // rice: other buttons than the left one do nothing on a title bar.
+                // ashd: other buttons than the left one do nothing on a title bar.
                 let ignored = self.title_bar_ignores_press(
                     button == Some(MouseButton::Left),
                     mod_down,
@@ -3562,7 +3562,7 @@ impl State {
             .then(|| self.niri.canvas_under_cursor())
             .flatten()
             {
-                // rice: Mod+LMB on the empty canvas plane pans it.
+                // ashd: Mod+LMB on the empty canvas plane pans it.
                 let start_data = PointerGrabStartData {
                     focus: None,
                     button: button_code,
@@ -4556,7 +4556,7 @@ impl State {
 
                         if let Some((output, ws)) = output_ws {
                             let ws_id = ws.id();
-                            // rice: on a canvas, the horizontal swipe pans in 2D instead.
+                            // ashd: on a canvas, the horizontal swipe pans in 2D instead.
                             let canvas = ws.is_canvas() && !is_overview_open;
                             if !(canvas && self.niri.layout.canvas_pan_gesture_begin(ws_id, true)) {
                                 let ws_idx =
@@ -4591,7 +4591,7 @@ impl State {
             handled = true;
         }
 
-        // rice: canvas 2D pan.
+        // ashd: canvas 2D pan.
         let res = self.niri.layout.canvas_pan_gesture_update(
             Point::from((delta_x, delta_y)),
             timestamp,
@@ -4662,7 +4662,7 @@ impl State {
             handled = true;
         }
 
-        // rice: canvas 2D pan; glides on unless cancelled.
+        // ashd: canvas 2D pan; glides on unless cancelled.
         let time = (!event.cancelled()).then(|| Duration::from_micros(event.time().micros()));
         if let Some(output) = self.niri.layout.canvas_pan_gesture_end(time, Some(true)) {
             if let Some(output) = output {
@@ -4709,7 +4709,7 @@ impl State {
             pointer.frame(self);
         }
 
-        // rice: pinch zooms a canvas around the cursor.
+        // ashd: pinch zooms a canvas around the cursor.
         if self.canvas_pinch_begin(event.fingers()) {
             return;
         }
@@ -4725,7 +4725,7 @@ impl State {
     }
 
     fn on_gesture_pinch_update<I: InputBackend>(&mut self, event: I::GesturePinchUpdateEvent) {
-        // rice: pinch zooms a canvas around the cursor.
+        // ashd: pinch zooms a canvas around the cursor.
         if self.canvas_pinch_update(event.scale()) {
             return;
         }
@@ -4765,7 +4765,7 @@ impl State {
     }
 
     fn on_gesture_pinch_end<I: InputBackend>(&mut self, event: I::GesturePinchEndEvent) {
-        // rice: pinch zooms a canvas around the cursor.
+        // ashd: pinch zooms a canvas around the cursor.
         if let Some(output) = self.niri.layout.canvas_zoom_gesture_end() {
             if let Some(output) = output {
                 self.niri.queue_redraw(&output);
@@ -4868,7 +4868,7 @@ impl State {
 
         let serial = SERIAL_COUNTER.next_serial();
 
-        // rice: touch sequences keep their focus location, so scaled windows are activate-only.
+        // ashd: touch sequences keep their focus location, so scaled windows are activate-only.
         let under = self.niri.contents_under(pos).without_scaled_input();
 
         let mod_key = self.backend.mod_key(&self.niri.config.borrow());
@@ -5029,7 +5029,7 @@ impl State {
             self.niri.queue_redraw(&output);
         }
 
-        let under = self.niri.contents_under(pos).without_scaled_input(); // rice
+        let under = self.niri.contents_under(pos).without_scaled_input(); // ashd
         handle.motion(
             self,
             under.surface,

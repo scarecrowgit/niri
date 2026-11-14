@@ -132,7 +132,7 @@ pub struct ResolvedWindowRules {
     /// Rules for this window's popups.
     pub popups: ResolvedPopupsRules,
 
-    /// rice: whether to show the compositor-drawn title bar (`None`: per layout config).
+    /// ashd: whether to show the compositor-drawn title bar (`None`: per layout config).
     pub title_bar: Option<bool>,
 }
 
@@ -325,7 +325,7 @@ impl ResolvedWindowRules {
 
                 resolved.popups.merge_with(&rule.popups);
 
-                // rice
+                // ashd
                 if let Some(x) = rule.title_bar {
                     resolved.title_bar = Some(x);
                 }

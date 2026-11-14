@@ -100,7 +100,7 @@ fn build_ui(app: &adw::Application) {
         Tile::fixed_size_with_csd_shadow_open,
         "Fixed Size Tile - CSD Shadow - Open",
     );
-    // rice
+    // ashd
     s.add(
         Tile::title_bar_with_ring_gap,
         "Tile - Title Bar, Focus Ring Gap",

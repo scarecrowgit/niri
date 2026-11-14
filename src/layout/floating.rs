@@ -29,9 +29,9 @@ use crate::utils::{
 };
 use crate::window::ResolvedWindowRules;
 
-// rice: unbounded (infinite canvas) mode of the floating space.
+// ashd: unbounded (infinite canvas) mode of the floating space.
 mod canvas_mode;
-use canvas_mode::rice_u_pos;
+use canvas_mode::ashd_u_pos;
 
 /// By how many logical pixels the directional move commands move floating windows.
 pub const DIRECTIONAL_MOVE_PX: f64 = 50.;
@@ -74,7 +74,7 @@ pub struct FloatingSpace<W: LayoutElement> {
     /// Configurable properties of the layout.
     options: Rc<Options>,
 
-    /// rice: canvas transform when the space is in unbounded (canvas) mode.
+    /// ashd: canvas transform when the space is in unbounded (canvas) mode.
     ///
     /// In canvas mode, tile data positions are plane coordinates (unclamped), and all positions
     /// this space reports or accepts are unscaled view coordinates, `plane - offset`.
@@ -105,10 +105,10 @@ struct Data {
     /// Working area used for conversions.
     working_area: Rectangle<f64, Logical>,
 
-    /// rice: whether `pos`/`logical_pos` are unclamped canvas plane coordinates.
+    /// ashd: whether `pos`/`logical_pos` are unclamped canvas plane coordinates.
     canvas: bool,
 
-    /// rice: whether this canvas tile is pinned; its positions are then unscaled view
+    /// ashd: whether this canvas tile is pinned; its positions are then unscaled view
     /// coordinates that stay fixed while the view pans.
     pinned: bool,
 }
@@ -155,7 +155,7 @@ impl Data {
     }
 
     fn recompute_logical_pos(&mut self) {
-        // rice: canvas positions are unbounded.
+        // ashd: canvas positions are unbounded.
         if self.canvas {
             self.logical_pos = Point::from((self.pos.x, self.pos.y));
             return;
@@ -206,7 +206,7 @@ impl Data {
 
     pub fn set_logical_pos(&mut self, logical_pos: Point<f64, Logical>) {
         self.pos = if self.canvas {
-            // rice: canvas positions are stored as is.
+            // ashd: canvas positions are stored as is.
             Point::from((logical_pos.x, logical_pos.y))
         } else {
             Self::logical_to_size_frac_in_working_area(self.working_area, logical_pos)
@@ -330,7 +330,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
     pub fn tiles_with_offsets(&self) -> impl Iterator<Item = (&Tile<W>, Point<f64, Logical>)> + '_ {
         let canvas = self.canvas;
-        let offsets = self.data.iter().map(move |d| rice_u_pos(canvas, d));
+        let offsets = self.data.iter().map(move |d| ashd_u_pos(canvas, d));
         zip(&self.tiles, offsets)
     }
 
@@ -338,7 +338,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         &mut self,
     ) -> impl Iterator<Item = (&mut Tile<W>, Point<f64, Logical>)> + '_ {
         let canvas = self.canvas;
-        let offsets = self.data.iter().map(move |d| rice_u_pos(canvas, d));
+        let offsets = self.data.iter().map(move |d| ashd_u_pos(canvas, d));
         zip(&mut self.tiles, offsets)
     }
 
@@ -410,7 +410,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         for (tile, pos) in self.tiles_with_offsets() {
             if tile.window().id() == id {
                 // Position within the working area.
-                let mut target = self.rice_frac_area();
+                let mut target = self.ashd_frac_area();
                 target.loc -= pos;
                 target.loc -= tile.window_loc();
 
@@ -494,9 +494,9 @@ impl<W: LayoutElement> FloatingSpace<W> {
             }
         }
 
-        // rice: canvas mode places tiles on the plane.
+        // ashd: canvas mode places tiles on the plane.
         let data = if self.canvas.is_some() {
-            self.rice_new_data(&mut tile)
+            self.ashd_new_data(&mut tile)
         } else {
             let pos = self.stored_or_default_tile_pos(&tile).unwrap_or_else(|| {
                 center_preferring_top_left_in_area(self.working_area, tile.tile_size())
@@ -512,7 +512,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
     pub fn add_tile_above(&mut self, above: &W::Id, mut tile: Tile<W>, activate: bool) {
         let idx = self.idx_of(above).unwrap();
 
-        let above_pos = rice_u_pos(self.canvas, &self.data[idx]);
+        let above_pos = ashd_u_pos(self.canvas, &self.data[idx]);
         let above_size = self.data[idx].size;
         let tile_size = tile.tile_size();
         let pos = above_pos + (above_size.to_point() - tile_size.to_point()).downscale(2.);
@@ -579,9 +579,9 @@ impl<W: LayoutElement> FloatingSpace<W> {
         }
         // Store the floating position.
         tile.floating_pos = Some(data.pos);
-        // rice: canvas tiles remember their exact plane position.
+        // ashd: canvas tiles remember their exact plane position.
         if self.canvas.is_some() {
-            self.rice_on_remove(&mut tile, &data);
+            self.ashd_on_remove(&mut tile, &data);
         }
 
         let width = ColumnWidth::Fixed(tile.tile_expected_or_current_size().w);
@@ -895,11 +895,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
             return false;
         };
         let active_idx = self.idx_of(active_id).unwrap();
-        let center = self.rice_center(&self.data[active_idx]);
+        let center = self.ashd_center(&self.data[active_idx]);
 
         let result = zip(&self.tiles, &self.data)
             .filter(|(tile, _)| tile.window().id() != active_id)
-            .map(|(tile, data)| (tile, distance(center, self.rice_center(data))))
+            .map(|(tile, data)| (tile, distance(center, self.ashd_center(data))))
             .filter(|(_, dist)| *dist > 0.)
             .min_by(|(_, dist_a), (_, dist_b)| f64::total_cmp(dist_a, dist_b));
         if let Some((tile, _)) = result {
@@ -1060,8 +1060,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
         let idx = self.idx_of(&id).unwrap();
 
         let new_pos = if self.canvas.is_some() {
-            // rice: center within the visible part of the canvas.
-            self.rice_center_pos(idx)
+            // ashd: center within the visible part of the canvas.
+            self.ashd_center_pos(idx)
         } else {
             center_preferring_top_left_in_area(self.working_area, self.data[idx].size)
         };
@@ -1140,8 +1140,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
                 continue;
             }
 
-            // rice: cull canvas tiles far outside the view.
-            if !self.rice_tile_visible(tile, tile_pos, view_rect) {
+            // ashd: cull canvas tiles far outside the view.
+            if !self.ashd_tile_visible(tile, tile_pos, view_rect) {
                 continue;
             }
 
@@ -1280,7 +1280,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         pos: Point<f64, Logical>,
         size: Size<f64, Logical>,
     ) -> Point<f64, Logical> {
-        // rice: the canvas is unbounded.
+        // ashd: the canvas is unbounded.
         if self.canvas.is_some() {
             return pos;
         }
@@ -1291,11 +1291,11 @@ impl<W: LayoutElement> FloatingSpace<W> {
     }
 
     pub fn scale_by_working_area(&self, pos: Point<f64, SizeFrac>) -> Point<f64, Logical> {
-        Data::scale_by_working_area(self.rice_frac_area(), pos)
+        Data::scale_by_working_area(self.ashd_frac_area(), pos)
     }
 
     pub fn logical_to_size_frac(&self, logical_pos: Point<f64, Logical>) -> Point<f64, SizeFrac> {
-        Data::logical_to_size_frac_in_working_area(self.rice_frac_area(), logical_pos)
+        Data::logical_to_size_frac_in_working_area(self.ashd_frac_area(), logical_pos)
     }
 
     fn move_and_animate(&mut self, idx: usize, new_pos: Point<f64, Logical>) {
@@ -1322,7 +1322,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         rules: &ResolvedWindowRules,
     ) -> Size<i32, Logical> {
         let border = self.options.layout.border.merged_with(&rules.border);
-        // rice: tile heights include the title strip.
+        // ashd: tile heights include the title strip.
         let title_bar = super::title_bar::title_bar_height_for(&self.options, rules);
 
         let resolve = |size: Option<PresetSize>, working_area_size: f64, extra: f64| {
@@ -1355,7 +1355,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
             tile.window().rules().default_floating_position.map(|pos| {
                 let relative_to = pos.relative_to;
                 let size = tile.tile_size();
-                let area = self.rice_frac_area();
+                let area = self.ashd_frac_area();
 
                 let mut pos = Point::from((pos.x.0, pos.y.0));
                 if relative_to == RelativeTo::TopRight
@@ -1401,7 +1401,7 @@ impl<W: LayoutElement> FloatingSpace<W> {
         &self.clock
     }
 
-    // rice: also used by canvas mode outside of tests.
+    // ashd: also used by canvas mode outside of tests.
     pub fn options(&self) -> &Rc<Options> {
         &self.options
     }

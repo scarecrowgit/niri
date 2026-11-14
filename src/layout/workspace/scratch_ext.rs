@@ -1,4 +1,4 @@
-//! rice: hidden (scratchpad) workspaces, workspace side.
+//! ashd: hidden (scratchpad) workspaces, workspace side.
 //!
 //! See `crate::layout::scratch` for the semantics. The hooks here keep every tile's
 //! [`ScratchOrigin`] up to date as it moves between workspaces.

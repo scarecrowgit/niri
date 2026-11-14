@@ -9,7 +9,7 @@
 //! - Workspace id: name for named workspaces, unset for unnamed. Because ids in this protocol are
 //!   expected to be stable across sessions.
 //! - Workspace name: name for named workspaces, index for unnamed.
-//! - rice: hidden (scratchpad) workspaces are not announced, and the index above is the visual
+//! - ashd: hidden (scratchpad) workspaces are not announced, and the index above is the visual
 //!   index that counts only the visible workspaces (the one `focus-workspace N` takes).
 
 use std::collections::hash_map::Entry;
@@ -99,7 +99,7 @@ pub fn refresh(state: &mut State) {
     // Remove workspaces that no longer exist (sending workspace_leave to workspace groups).
     let mut seen_workspaces = HashMap::new();
     for (mon, _, ws) in state.niri.layout.workspaces() {
-        // rice: hidden (scratchpad) workspaces are not announced.
+        // ashd: hidden (scratchpad) workspaces are not announced.
         if ws.is_hidden() {
             continue;
         }
@@ -145,7 +145,7 @@ pub fn refresh(state: &mut State) {
 
     // Update existing workspaces and create new ones.
     for (mon, ws_idx, ws) in state.niri.layout.workspaces() {
-        // rice: hidden workspaces are skipped; coordinates and default names use the visual
+        // ashd: hidden workspaces are skipped; coordinates and default names use the visual
         // index (the one `focus-workspace N` takes).
         if ws.is_hidden() {
             continue;

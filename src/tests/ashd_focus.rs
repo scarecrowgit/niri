@@ -1,4 +1,4 @@
-//! rice: workspace index references with hidden workspaces, and explicit focus actions taking
+//! ashd: workspace index references with hidden workspaces, and explicit focus actions taking
 //! the keyboard from an on-demand layer surface.
 
 use niri_config::{Action, Config, WorkspaceReference};

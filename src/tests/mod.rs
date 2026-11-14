@@ -7,13 +7,13 @@ mod test_input_backend;
 
 mod animations;
 mod binds;
-mod canvas_input; // rice
+mod canvas_input; // ashd
 mod floating;
 mod fullscreen;
 mod layer_shell;
 mod remove_output;
-mod rice_focus; // rice
-mod title_bar_input; // rice
+mod ashd_focus; // ashd
+mod title_bar_input; // ashd
 mod transactions;
 mod virtual_pointer;
 mod window_opening;

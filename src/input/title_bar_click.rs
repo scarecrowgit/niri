@@ -1,4 +1,4 @@
-//! rice: pointer presses on compositor-drawn title bars.
+//! ashd: pointer presses on compositor-drawn title bars.
 //!
 //! - Press: activates the window and starts a move grab: dragging moves the window like Mod+drag,
 //!   releasing without a drag just activates it.

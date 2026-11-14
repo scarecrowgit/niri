@@ -176,7 +176,7 @@ impl ClosingWindow {
         }
     }
 
-    /// rice: moves the closing window (canvas view panned under it).
+    /// ashd: moves the closing window (canvas view panned under it).
     pub fn offset_pos(&mut self, delta: Point<f64, Logical>) {
         self.pos += delta;
     }

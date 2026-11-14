@@ -1,4 +1,4 @@
-//! rice: compositor-drawn title strip of a tile.
+//! ashd: compositor-drawn title strip of a tile.
 //!
 //! The strip sits between the top border and the window: tile = border + strip + window + border
 //! vertically. It shows the window title on the left (ellipsized) and a muted subtitle (the app

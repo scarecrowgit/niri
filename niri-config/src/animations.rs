@@ -25,7 +25,7 @@ pub struct Animations {
     pub screenshot_ui_open: ScreenshotUiOpenAnim,
     pub overview_open_close: OverviewOpenCloseAnim,
     pub recent_windows_close: RecentWindowsCloseAnim,
-    // rice: infinite canvas view animations.
+    // ashd: infinite canvas view animations.
     pub canvas_pan: CanvasPanAnim,
     pub canvas_zoom: CanvasZoomAnim,
 }
@@ -82,7 +82,7 @@ pub struct AnimationsPart {
     pub overview_open_close: Option<OverviewOpenCloseAnim>,
     #[knuffel(child)]
     pub recent_windows_close: Option<RecentWindowsCloseAnim>,
-    // rice: infinite canvas view animations.
+    // ashd: infinite canvas view animations.
     #[knuffel(child)]
     pub canvas_pan: Option<CanvasPanAnim>,
     #[knuffel(child)]
@@ -620,7 +620,7 @@ impl Animation {
         }
     }
 
-    // rice: pub(crate) so that crate::canvas can decode its animations.
+    // ashd: pub(crate) so that crate::canvas can decode its animations.
     pub(crate) fn decode_node<S: knuffel::traits::ErrorSpan>(
         node: &knuffel::ast::SpannedNode<S>,
         ctx: &mut knuffel::decode::Context<S>,

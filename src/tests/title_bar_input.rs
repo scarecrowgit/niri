@@ -1,4 +1,4 @@
-//! rice: pointer input on compositor-drawn title strips.
+//! ashd: pointer input on compositor-drawn title strips.
 
 use niri_config::Config;
 use smithay::utils::{Logical, Point};

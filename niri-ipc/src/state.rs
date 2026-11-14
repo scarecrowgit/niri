@@ -53,10 +53,10 @@ pub struct EventStreamState {
     /// State of touchpads.
     pub touchpad: TouchpadState,
 
-    /// State of the canvas views (rice fork).
+    /// State of the canvas views (ashd fork).
     pub canvas: CanvasState,
 
-    /// State of the strip (scrolling layout) views (rice fork).
+    /// State of the strip (scrolling layout) views (ashd fork).
     pub strip: StripState,
 }
 
@@ -102,14 +102,14 @@ pub struct CastsState {
     pub casts: HashMap<u64, Cast>,
 }
 
-/// The canvas view state communicated over the event stream (rice fork).
+/// The canvas view state communicated over the event stream (ashd fork).
 #[derive(Debug, Default)]
 pub struct CanvasState {
     /// Map from a workspace id to the view of that canvas-mode workspace.
     pub views: HashMap<u64, CanvasViewState>,
 }
 
-/// The strip view state communicated over the event stream (rice fork).
+/// The strip view state communicated over the event stream (ashd fork).
 #[derive(Debug, Default)]
 pub struct StripState {
     /// Map from a workspace id to the scroll state of that strip-mode workspace.

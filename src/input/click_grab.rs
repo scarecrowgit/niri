@@ -18,7 +18,7 @@ use smithay::utils::{Logical, Point};
 pub struct ClickGrab<D: SeatHandler> {
     start_data: GrabStartData<D>,
     focus: Option<(D::PointerFocus, Point<f64, Logical>)>,
-    /// rice: origin (global, as drawn) and zoom of a focused surface drawn scaled (zoomed
+    /// ashd: origin (global, as drawn) and zoom of a focused surface drawn scaled (zoomed
     /// canvas).
     scaled: Option<(Point<f64, Logical>, f64)>,
 }

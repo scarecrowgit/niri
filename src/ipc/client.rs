@@ -374,7 +374,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 return Ok(());
             }
 
-            // rice: hidden workspaces (idx 0) go after the visible ones.
+            // ashd: hidden workspaces (idx 0) go after the visible ones.
             response.sort_by_key(|ws| (ws.is_hidden, ws.idx));
             response.sort_by(|a, b| a.output.cmp(&b.output));
 
@@ -397,7 +397,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 }
 
                 let is_active = if ws.is_active { " * " } else { "   " };
-                // rice: hidden workspaces have no index.
+                // ashd: hidden workspaces have no index.
                 let idx = if ws.is_hidden {
                     String::from("-")
                 } else {
@@ -408,7 +408,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 } else {
                     String::new()
                 };
-                // rice: canvas mode and hidden workspaces.
+                // ashd: canvas mode and hidden workspaces.
                 let mode = if ws.mode == WorkspaceMode::Canvas {
                     " (canvas)"
                 } else {
@@ -540,7 +540,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                     Event::TouchpadToggled { on } => {
                         println!("Touchpad enabled: {on}");
                     }
-                    // rice: canvas mode, canvas and strip views.
+                    // ashd: canvas mode, canvas and strip views.
                     Event::WorkspaceModeChanged { id, mode } => {
                         println!("Workspace {id}: mode changed to {mode:?}");
                     }
@@ -816,7 +816,7 @@ fn print_window(window: &Window) {
         println!("  Workspace ID: (none)");
     }
 
-    // rice: scratchpad origin.
+    // ashd: scratchpad origin.
     if let Some(id) = window.hidden_from_workspace_id {
         println!("  Hidden from workspace ID: {id}");
     }
@@ -850,7 +850,7 @@ fn print_window(window: &Window) {
         );
     }
 
-    // rice: canvas plane position.
+    // ashd: canvas plane position.
     if let Some(pos) = pos_in_canvas {
         let pinned = if is_pinned { " (pinned)" } else { "" };
         println!(
@@ -868,7 +868,7 @@ fn print_window(window: &Window) {
     );
 }
 
-/// rice: pretty-prints a canvas view.
+/// ashd: pretty-prints a canvas view.
 fn print_canvas_view(view: &CanvasViewState) {
     let CanvasViewState {
         workspace_id,
@@ -912,7 +912,7 @@ fn print_canvas_view(view: &CanvasViewState) {
     }
 }
 
-/// rice: zoom factors with up to three decimals.
+/// ashd: zoom factors with up to three decimals.
 fn fmt_zoom(zoom: f64) -> String {
     let s = format!("{zoom:.3}");
     let s = s.trim_end_matches('0').trim_end_matches('.');

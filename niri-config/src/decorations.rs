@@ -1,4 +1,4 @@
-//! rice: compositor-drawn window decorations and canvas plane decorations.
+//! ashd: compositor-drawn window decorations and canvas plane decorations.
 //!
 //! Everything here is off unless configured, so stock configs render exactly like upstream.
 //!
@@ -147,7 +147,7 @@ impl MergeWith<TitleBarPart> for TitleBar {
     }
 }
 
-/// rice: outline and clipping of the working area (floating shell themes).
+/// ashd: outline and clipping of the working area (floating shell themes).
 ///
 /// ```kdl
 /// layout {
