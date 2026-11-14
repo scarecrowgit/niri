@@ -1535,6 +1535,8 @@ impl<W: LayoutElement> Workspace<W> {
             .tiles_with_render_positions()
             .find(|(tile, _, _)| *tile.window().id() == id)
             .unwrap();
+        // ashd: on a canvas the floating space is drawn zoomed.
+        let old_zoom = self.canvas_tile_zoom(&id);
 
         if self.floating.has_window(&id) {
             let removed = self.floating.remove_tile(&id);
@@ -1576,12 +1578,18 @@ impl<W: LayoutElement> Workspace<W> {
             }
         }
 
+        // ashd: animate from where (and how big) the tile was drawn.
+        let new_zoom = self.canvas_tile_zoom(&id);
+        let render_pos = render_pos.upscale(old_zoom).downscale(new_zoom);
+        let config = self.options.animations.window_movement.0;
+
         let (tile, new_render_pos) = self
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| *tile.window().id() == id)
             .unwrap();
 
         tile.animate_move_from(render_pos - new_render_pos);
+        tile.animate_zoom_from(old_zoom / new_zoom, config); // ashd
     }
 
     pub fn set_window_floating(&mut self, id: Option<&W::Id>, floating: bool) {

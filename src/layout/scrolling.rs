@@ -7,6 +7,7 @@ use niri_config::utils::MergeWith as _;
 use niri_config::{CenterFocusedColumn, PresetSize, Struts};
 use niri_ipc::{ColumnDisplay, SizeChange, WindowLayout};
 use ordered_float::NotNan;
+use smithay::backend::renderer::element::utils::RescaleRenderElement; // ashd
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Serial, Size};
 
@@ -105,6 +106,8 @@ niri_render_elements! {
         Tile = TileRenderElement<R>,
         ClosingWindow = ClosingWindowRenderElement,
         TabIndicator = TabIndicatorRenderElement,
+        // ashd: a tile changing the zoom it is drawn at.
+        ScaledTile = RescaleRenderElement<TileRenderElement<R>>,
     }
 }
 
@@ -3064,6 +3067,16 @@ impl<W: LayoutElement> ScrollingSpace<W> {
                 }
 
                 let xray_pos = xray_pos.offset(tile_pos);
+                // ashd: zoom transition.
+                let zoom = tile.zoom_transition_scale();
+                if zoom != 1. {
+                    let origin = tile_pos.to_physical_precise_round(scale);
+                    tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
+                        let elem = RescaleRenderElement::from_element(elem, origin, zoom);
+                        push(ScrollingSpaceRenderElement::ScaledTile(elem))
+                    });
+                    continue;
+                }
                 tile.render(ctx.r(), tile_pos, xray_pos, focus_ring, &mut |elem| {
                     push(elem.into())
                 });

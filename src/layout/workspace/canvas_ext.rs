@@ -364,6 +364,15 @@ impl<W: LayoutElement> Workspace<W> {
             .map_or(1., |m| m.decor_alpha() as f32)
     }
 
+    /// Zoom a tile of this workspace is drawn at: the canvas zoom on the plane, 1 elsewhere.
+    pub(super) fn canvas_tile_zoom(&self, id: &W::Id) -> f64 {
+        if self.is_canvas() && self.floating.has_window(id) {
+            self.canvas_zoom()
+        } else {
+            1.
+        }
+    }
+
     /// Whether a mode switch animation is running.
     pub fn is_mode_switch_ongoing(&self) -> bool {
         self.canvas.mode_switch.is_some()

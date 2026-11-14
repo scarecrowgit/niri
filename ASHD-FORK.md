@@ -1378,8 +1378,15 @@ from the switch *target*, `Monitor::edge_panels_covered()`, not from the settled
 window move and resize run inside the workspace switch, and canvas windows leave fullscreen as a
 column of the fullscreen workspace and travel back onto the plane. Remaining pops are on the
 shell side: it blanks its own bar and hides its strip header when it sees a fullscreen window
-over IPC. A canvas window still changes from the canvas zoom to 1:1 in one frame when it
-*enters* fullscreen (a per-tile scale animation would be needed).
+over IPC.
+
+A canvas window used to change between the canvas zoom and 1:1 in one frame whenever it left the
+plane or came back (fullscreen, maximize, toggling floating, moving to another workspace). Tiles
+now carry a zoom transition (`Tile::animate_zoom_from`): they are drawn scaled by
+old zoom / new zoom around their top-left (`ScaledTile` render element variants of the floating
+and scrolling spaces) and the factor animates to 1 with the move animation, while the move starts
+from where the tile was drawn. Hooks: `Monitor::move_to_workspace_placed` and
+`Workspace::toggle_window_floating_impl`. Hit-testing uses the final size meanwhile.
 
 ## Strip ↔ canvas transition
 

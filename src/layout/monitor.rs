@@ -901,7 +901,8 @@ impl<W: LayoutElement> Monitor<W> {
             .find_map(|(tile, offset, _visible)| (tile.window().id() == &window).then_some(offset))
             .unwrap();
         // ashd: canvas tiles report unscaled positions; animate from where it is drawn.
-        old_render_pos = old_render_pos.upscale(canvas_tile_zoom(workspace, &window));
+        let old_zoom = canvas_tile_zoom(workspace, &window);
+        old_render_pos = old_render_pos.upscale(old_zoom);
 
         let transaction = Transaction::new();
         let removed = workspace.remove_tile(&window, transaction);
@@ -971,6 +972,8 @@ impl<W: LayoutElement> Monitor<W> {
             old_render_pos.downscale(new_zoom) - new_render_pos,
             config,
         );
+        // ashd: and at the size it is drawn (canvas zoom ↔ 1).
+        tile.animate_zoom_from(old_zoom / new_zoom, config);
         tile.set_anim_y_between_workspaces();
     }
 

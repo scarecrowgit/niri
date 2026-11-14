@@ -82,6 +82,9 @@ pub struct Tile<W: LayoutElement> {
 
     /// ashd: exact canvas plane position to restore when the tile re-enters the canvas of the
     /// workspace it is on (e.g. after fullscreen). Cleared when the tile leaves its workspace.
+    /// ashd: the tile is drawn scaled by this (→ 1) while it changes between a zoomed canvas
+    /// and an unzoomed place (fullscreen, another workspace), so its size doesn't pop.
+    pub(super) zoom_transition: Option<Animation>,
     pub(super) canvas_plane_pos: Option<Point<f64, Logical>>,
 
     /// ashd: where the tile was before it went to a hidden (scratchpad) workspace.
@@ -227,7 +230,8 @@ impl<W: LayoutElement> Tile<W> {
             floating_window_size: None,
             floating_pos: None,
             canvas_plane_pos: None,
-            scratch_origin: None, // ashd
+            zoom_transition: None, // ashd
+            scratch_origin: None,  // ashd
             floating_preset_width_idx: None,
             floating_preset_height_idx: None,
             open_animation: None,
@@ -510,6 +514,28 @@ impl<W: LayoutElement> Tile<W> {
                 self.alpha_animation = None;
             }
         }
+
+        // ashd
+        if self.zoom_transition.as_ref().is_some_and(|a| a.is_done()) {
+            self.zoom_transition = None;
+        }
+    }
+
+    /// ashd: starts drawing the tile at `from` times its size, animating back to 1 (a tile
+    /// that just changed the zoom it is drawn at).
+    pub fn animate_zoom_from(&mut self, from: f64, config: niri_config::Animation) {
+        if (from - 1.).abs() < 1e-6 || !from.is_finite() || from <= 0. {
+            return;
+        }
+        let from = from * self.zoom_transition_scale();
+        self.zoom_transition = Some(Animation::new(self.clock.clone(), from, 1., 0., config));
+    }
+
+    /// ashd: the extra scale the tile is drawn at (see [`Self::animate_zoom_from`]).
+    pub fn zoom_transition_scale(&self) -> f64 {
+        self.zoom_transition
+            .as_ref()
+            .map_or(1., |anim| anim.value().max(0.01))
     }
 
     pub fn are_animations_ongoing(&self) -> bool {
@@ -517,7 +543,8 @@ impl<W: LayoutElement> Tile<W> {
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
-        self.open_animation.is_some()
+        self.zoom_transition.is_some() // ashd
+            || self.open_animation.is_some()
             || self.resize_animation.is_some()
             || self.move_x_animation.is_some()
             || self.move_y_animation.is_some()
