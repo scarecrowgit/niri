@@ -204,6 +204,13 @@ workspace render geometry origin, divided by the overview zoom).
 `set_canvas_transform(t)`, `canvas_plane_rects()`, `canvas_plane_rect(id)`,
 `set_canvas_plane_pos(id, plane, animate)`, `is_pinned(id)`, `set_pinned(id, bool)`.
 
+### Pointer input under zoom
+
+Implemented, see "Canvas pointer input" below. `Workspace::canvas_window_under()` returns
+`HitType::ScaledInput { win_pos, zoom }` (view coordinates) for hits on canvas windows at
+zoom ≠ 1, and `Niri::contents_under()` turns it into a pointer focus with scaled surface-local
+coordinates.
+
 ### Planned IPC shape (next agent)
 
 - `WindowLayout.pos_in_canvas: Option<(f64, f64)>` – plane position of the tile (canvas windows),
