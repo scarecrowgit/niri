@@ -76,6 +76,9 @@ layout {
         pan-step 120
         wheel-zoom-factor 1.2   // Mod+scroll zoom per wheel notch, 1..4; 1 = off (binds get it)
         smooth-zoom-out true    // supersample window contents below 80% (false: bilinear)
+        title-labels true       // constant-size title labels when zoomed out
+        title-labels-below 0.7  // zoom below which they fade in (fully shown 0.1 lower)
+        title-labels-size 12    // label text size, logical px (4..72)
     }
 }
 
@@ -92,7 +95,7 @@ animations {
 }
 ```
 
-See "Zoom feel and zoom-out quality" at the end for the last three.
+See "Zoom feel and zoom-out quality" for the wheel, filter and label options.
 
 `default-workspace-mode` and `canvas {}` are regular `layout` options, so they merge per output
 (`output { layout { ... } }`) and per named workspace (`workspace "x" { layout { ... } }`) like
@@ -1115,8 +1118,10 @@ Cost: one pass, no offscreen buffers, no extra memory, no CPU work. Texture read
 bilinear fetches per fully redrawn frame, ~1.3 G/s at 180 Hz — around 1% of the texture rate of
 a current desktop AMD GPU; static canvases are not redrawn (damage is unchanged).
 
-Not covered: the interactive-move tile while dragged over a canvas, and strip windows in the
-overview, are still drawn with plain bilinear filtering.
+The interactive-move tile uses the same filter while it is drawn at a canvas zoom below 1
+(`render_interactive_move_for_output` wraps it; the `RescaledTile` output element variant in
+`src/niri.rs` is a `MinifyRenderElement` now), so a window does not change sharpness when it is
+grabbed. Not covered: strip windows in the overview (upstream behaviour, bilinear).
 
 ### Files
 
@@ -1127,23 +1132,42 @@ overview, are still drawn with plain bilinear filtering.
 | `src/render_helpers/{mod,shaders/mod}.rs` | `mod minify`; `Shaders.minify` |
 | `src/render_helpers/clipped_surface.rs` | `draw` picks the minifying variant via `minify::clipped_program` (2 × 3 lines) |
 | `src/layout/workspace.rs` | `Canvas` variant wraps `MinifyRenderElement` |
-| `src/layout/workspace/canvas_ext.rs` | `canvas_zoom_by`, `canvas_animate_to_with`, minify wrapper in `render_canvas` |
+| `src/layout/workspace/canvas_ext.rs` | `canvas_zoom_by`, `canvas_animate_to_with`, minify wrapper in `render_canvas`, `render_canvas_labels` |
 | `src/layout/canvas.rs` | velocity carry-over, `carried_zoom_velocity`, `scroll_zoom_factor`, `zoom_by_target`, step skipping, `Layout::canvas_zoom_by_at`, tests |
 | `src/input/canvas_actions.rs`, `src/input/mod.rs` | `State::canvas_scroll_zoom`, called first in `on_pointer_axis` |
-| `niri-config/src/{canvas,animations,lib}.rs` | `wheel-zoom-factor`, `smooth-zoom-out`, `canvas-wheel-zoom`, parse tests, snapshot |
+| `niri-config/src/{canvas,animations,lib}.rs` | `wheel-zoom-factor`, `smooth-zoom-out`, `title-labels*`, `canvas-wheel-zoom`, parse tests, snapshot |
 | `src/tests/canvas_input.rs` | Mod+wheel client tests |
+| `src/layout/title_bar.rs` | canvas title labels: `LabelStyle`, `label_element`, `LabelCache`, `render_label`, tests |
+| `src/layout/tile.rs` | tiles on a canvas keep their title text for labels (2 lines) |
+| `src/layout/mod.rs`, `src/niri.rs` | moved tile wrapped in `MinifyRenderElement`; `RescaledTile` variant type |
 
 No IPC changes.
 
-### Legibility at the minimum zoom (proposal, not built)
+### Canvas title labels
 
 With proper filtering, 9–11 px terminal text is readable down to about 0.4 and becomes grey
-texture below (3 px glyphs at 0.25); title strips at 0.4 have 4.4 px text. A cheap aid if wanted:
-below a configurable zoom (e.g. `title-labels-below 0.5`), draw each window's title as a label
-with a constant on-screen size (e.g. 12 px) over the top of the scaled strip, from the existing
-title-text texture cache rasterized at output scale (not × zoom), ellipsized to the scaled tile
-width and culled when that is narrower than ~40 px. One extra texture element per visible
-window, re-rasterized only when the title or the tile width bucket changes.
+texture below; the scaled title strips have 4–7 px text there. So below `title-labels-below`
+(default 0.7) every canvas window gets a **title label** at a constant on-screen size:
+
+- the window title (the app id if there is none), `title-labels-size` (default 12) logical px
+  in the `title-bar` font family, `title-bar` `text-color` on `title-bar` `background-color`,
+  padded 6/2 px; the focused window's label uses the `focus-ring` `active-color` (the accent);
+- bottom-left corner 4 px above the tile's top-left corner, ellipsized to the tile's on-screen
+  width, none for tiles narrower than 24 px on screen; the scaled title strip stays underneath;
+- opacity `clamp((title-labels-below − zoom) / 0.1, 0, 1)` of the *current* zoom, so labels fade
+  in and out across the threshold during animations, pinches and wheel zooms (no popping);
+- not hit-tested (input goes to whatever is under the label); drawn above all canvas windows as
+  a `CanvasDecor` element, so the work-area clip applies; hidden for windows blocked out from
+  the capture target; not drawn for fullscreen/maximized windows or the interactive-move tile.
+
+Rasterization: each tile's `TitleBar` keeps an MRU cache of 6 label textures keyed by (text,
+font, size, colours, output scale, width bucket). Width buckets are `24 · 1.25ⁿ` physical px
+(the largest that fits), so a zoom animation from 0.7 to 0.4 crosses at most 3 buckets and
+rasterizes at most 4 labels per window once; going back and forth, a settled zoom and panning
+rasterize nothing (unit test `zoom_animation_does_not_rasterize_per_frame`). The per-frame path
+compares the key without allocating. Labels need the title on canvases even without title
+strips, so tiles on a canvas read their title every frame like tiles with strips already did.
+`title-labels false` turns them off.
 
 ## Workspaces by index
 

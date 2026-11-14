@@ -17,6 +17,11 @@
 //!         wheel-zoom-factor 1.2
 //!         // Supersample window contents when the canvas is zoomed out (false: plain bilinear).
 //!         smooth-zoom-out true
+//!         // Window title labels at a constant on-screen size above canvas windows once the zoom
+//!         // drops below `title-labels-below` (they fade in over the 0.1 below it).
+//!         title-labels true
+//!         title-labels-below 0.7
+//!         title-labels-size 12
 //!     }
 //! }
 //!
@@ -50,6 +55,8 @@ use crate::FloatOrInt;
 pub const CANVAS_MIN_ZOOM: f64 = 0.05;
 /// Largest zoom accepted anywhere in canvas mode.
 pub const CANVAS_MAX_ZOOM: f64 = 4.;
+/// Zoom range below `title-labels-below` over which the title labels fade in.
+pub const TITLE_LABEL_FADE: f64 = 0.1;
 /// Largest accepted `wheel-zoom-factor`.
 pub const CANVAS_MAX_WHEEL_ZOOM_FACTOR: f64 = 4.;
 
@@ -68,6 +75,12 @@ pub struct Canvas {
     pub wheel_zoom_factor: f64,
     /// Supersample (box-filter) window contents drawn minified by the canvas zoom.
     pub smooth_zoom_out: bool,
+    /// Constant-size title labels above canvas windows when zoomed out.
+    pub title_labels: bool,
+    /// Zoom below which the title labels fade in (fully visible 0.1 below).
+    pub title_labels_below: f64,
+    /// Text size of the title labels, in logical pixels.
+    pub title_labels_size: f64,
     /// ashd: plane grid and named regions, see `crate::decorations`.
     pub decor: crate::decorations::CanvasDecor,
 }
@@ -80,6 +93,9 @@ impl Default for Canvas {
             pan_step: 120.,
             wheel_zoom_factor: 1.2,
             smooth_zoom_out: true,
+            title_labels: true,
+            title_labels_below: 0.7,
+            title_labels_size: 12.,
             decor: Default::default(), // ashd
         }
     }
@@ -133,6 +149,15 @@ impl Canvas {
             .clamp(1., CANVAS_MAX_WHEEL_ZOOM_FACTOR);
     }
 
+    /// Opacity of the title labels at `zoom`: 0 at or above `title-labels-below`, rising
+    /// linearly to 1 at [`TITLE_LABEL_FADE`] below it.
+    pub fn title_label_alpha(&self, zoom: f64) -> f64 {
+        if !self.title_labels || !zoom.is_finite() {
+            return 0.;
+        }
+        ((self.title_labels_below - zoom) / TITLE_LABEL_FADE).clamp(0., 1.)
+    }
+
     /// Whether Mod+scroll over a canvas zooms natively (instead of going to the wheel binds).
     pub fn wheel_zoom_enabled(&self) -> bool {
         self.wheel_zoom_factor > 1. + 1e-6
@@ -152,6 +177,12 @@ pub struct CanvasPart {
     pub wheel_zoom_factor: Option<FloatOrInt<1, 4>>,
     #[knuffel(child, unwrap(argument))]
     pub smooth_zoom_out: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub title_labels: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
+    pub title_labels_below: Option<FloatOrInt<0, 4>>,
+    #[knuffel(child, unwrap(argument))]
+    pub title_labels_size: Option<FloatOrInt<4, 72>>,
     /// ashd: plane grid and named regions, see `crate::decorations`.
     #[knuffel(flatten(child))]
     pub decor: crate::decorations::CanvasDecorPart,
@@ -173,6 +204,15 @@ impl MergeWith<CanvasPart> for Canvas {
         }
         if let Some(x) = part.smooth_zoom_out {
             self.smooth_zoom_out = x;
+        }
+        if let Some(x) = part.title_labels {
+            self.title_labels = x;
+        }
+        if let Some(x) = part.title_labels_below {
+            self.title_labels_below = x.0;
+        }
+        if let Some(x) = part.title_labels_size {
+            self.title_labels_size = x.0;
         }
         self.decor.merge_with(&part.decor); // ashd
         self.normalize();
@@ -294,6 +334,35 @@ mod tests {
         );
         assert_eq!(config.layout.canvas.wheel_zoom_factor, 1.2);
         assert!(config.layout.canvas.smooth_zoom_out);
+        assert!(config.layout.canvas.title_labels);
+        assert_eq!(config.layout.canvas.title_labels_below, 0.7);
+        assert_eq!(config.layout.canvas.title_labels_size, 12.);
+    }
+
+    #[test]
+    fn parse_title_labels_and_fade() {
+        let config = Config::parse_mem(
+            r#"
+            layout {
+                canvas {
+                    title-labels-below 0.5
+                    title-labels-size 14
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        let canvas = &config.layout.canvas;
+        assert_eq!(canvas.title_labels_size, 14.);
+        assert_eq!(canvas.title_label_alpha(0.5), 0.);
+        assert_eq!(canvas.title_label_alpha(0.62), 0.);
+        assert!((canvas.title_label_alpha(0.45) - 0.5).abs() < 1e-9);
+        assert!((canvas.title_label_alpha(0.4) - 1.).abs() < 1e-9);
+        assert_eq!(canvas.title_label_alpha(0.1), 1.);
+
+        let config = Config::parse_mem("layout { canvas { title-labels false; }; }").unwrap();
+        assert_eq!(config.layout.canvas.title_label_alpha(0.1), 0.);
+        assert!(Config::parse_mem("layout { canvas { title-labels-size 2; }; }").is_err());
     }
 
     #[test]

@@ -617,10 +617,12 @@ impl<W: LayoutElement> Tile<W> {
             1. - expanded_progress as f32,
         );
 
-        // ashd: title strip.
-        if self.title_bar.is_enabled() {
+        // ashd: title strip; on a canvas the title also feeds the canvas title label.
+        if self.title_bar.is_enabled() || self.options.canvas_tile_zoom.is_some() {
             let (title, subtitle) = self.window.title_bar_text();
             self.title_bar.set_text(title, subtitle);
+        }
+        if self.title_bar.is_enabled() {
             let radius = self
                 .window
                 .geometry_corner_radius()

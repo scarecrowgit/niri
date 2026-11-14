@@ -26,13 +26,15 @@ use crate::layout::canvas::{
     CanvasTransform, CanvasView, CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN, CANVAS_FIT_PADDING,
     CANVAS_TOUCHPAD_GESTURE_MOVEMENT,
 };
+use crate::layout::canvas_grid::CanvasDecorRenderElement;
 use crate::layout::scrolling::{Column, ColumnWidth, StripArrangement};
 use crate::layout::tile::Tile;
+use crate::layout::title_bar::{LabelStyle, LABEL_GAP};
 use crate::layout::{HitType, LayoutElement, Options, RemovedTile, RenderLayer};
 use crate::render_helpers::minify::MinifyRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
-use crate::render_helpers::RenderCtx;
+use crate::render_helpers::{RenderCtx, RenderTarget};
 use crate::utils::transaction::Transaction;
 use crate::utils::ResizeEdge;
 
@@ -874,6 +876,11 @@ impl<W: LayoutElement> Workspace<W> {
         let view_rect = self.floating_view_rect();
         let focus_ring = focus_ring && self.floating_is_active();
 
+        // Title labels go on top of the windows (elements pushed first are drawn on top).
+        if layer.is_normal() {
+            self.render_canvas_labels(ctx.renderer, ctx.target, focus_ring, push);
+        }
+
         // Tiles render at unscaled view positions; the rescale maps them to view = u * zoom.
         let xray_pos = XrayPos {
             pos_in_backdrop: xray_pos.pos_in_backdrop.downscale(zoom),
@@ -894,6 +901,69 @@ impl<W: LayoutElement> Workspace<W> {
                     let elem = MinifyRenderElement::new(elem, minify);
                     push(WorkspaceRenderElement::Canvas(elem))
                 });
+        }
+    }
+
+    /// Constant-size title labels above the canvas windows once the zoom drops below
+    /// `title-labels-below` (fading in over the next 0.1). Labels are not hit-tested.
+    fn render_canvas_labels<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        target: RenderTarget,
+        focus_ring: bool,
+        push: &mut dyn FnMut(WorkspaceRenderElement<R>),
+    ) {
+        let canvas = &self.options.layout.canvas;
+        let zoom = self.canvas_zoom();
+        let alpha = canvas.title_label_alpha(zoom) as f32;
+        if alpha <= 0. {
+            return;
+        }
+        let title_bar = &self.options.layout.title_bar;
+        let style = LabelStyle {
+            size: canvas.title_labels_size,
+            text_color: title_bar.text_color,
+            background_color: title_bar.background_color,
+        };
+        let accent = LabelStyle {
+            text_color: self.options.layout.focus_ring.active_color,
+            ..style
+        };
+        let active = focus_ring
+            .then(|| self.floating.active_window())
+            .flatten()
+            .map(|win| win.id().clone());
+        let view = Rectangle::from_size(self.view_size);
+        let label_room = canvas.title_labels_size * 2. + LABEL_GAP;
+
+        for (tile, pos) in self.floating.tiles_with_render_positions() {
+            let top_left = pos.upscale(zoom);
+            let width = tile.tile_size().w * zoom;
+            let room = Rectangle::new(
+                top_left - Point::from((0., label_room)),
+                Size::from((width, label_room)),
+            );
+            if !room.overlaps(view) {
+                continue;
+            }
+            let window = tile.window();
+            if target.should_block_out(window.rules().block_out_from) {
+                continue;
+            }
+            let style = if active.as_ref() == Some(window.id()) {
+                accent
+            } else {
+                style
+            };
+            let renderer = renderer.as_gles_renderer();
+            if let Some(elem) = tile
+                .title_bar()
+                .label_element(renderer, style, top_left, width, alpha)
+            {
+                push(WorkspaceRenderElement::CanvasDecor(
+                    CanvasDecorRenderElement::Label(elem),
+                ));
+            }
         }
     }
 
