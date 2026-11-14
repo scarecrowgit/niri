@@ -457,6 +457,11 @@ impl<W: LayoutElement> ScrollingSpace<W> {
         self.columns.iter_mut().flat_map(|col| col.tiles.iter_mut())
     }
 
+    /// rice: the working area with the struts applied.
+    pub fn working_area(&self) -> Rectangle<f64, Logical> {
+        self.working_area
+    }
+
     pub fn is_empty(&self) -> bool {
         self.columns.is_empty()
     }

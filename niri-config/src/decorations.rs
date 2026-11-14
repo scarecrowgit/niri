@@ -147,6 +147,77 @@ impl MergeWith<TitleBarPart> for TitleBar {
     }
 }
 
+/// rice: outline and clipping of the working area (floating shell themes).
+///
+/// ```kdl
+/// layout {
+///     work-area {
+///         outline-width 1
+///         outline-color "#2A2A27"
+///         corner-radius 12
+///         clip true
+///     }
+/// }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WorkArea {
+    /// Width of the outline drawn along the inside of the working area (0: no outline).
+    pub outline_width: f64,
+    pub outline_color: Color,
+    /// Corner radius of the outline and of the clip.
+    pub corner_radius: f64,
+    /// Clip strip and canvas content to the working area.
+    pub clip: bool,
+}
+
+impl Default for WorkArea {
+    fn default() -> Self {
+        Self {
+            outline_width: 0.,
+            outline_color: Color::from_rgba8_unpremul(0x2a, 0x2a, 0x27, 0xff),
+            corner_radius: 0.,
+            clip: false,
+        }
+    }
+}
+
+impl WorkArea {
+    /// Whether anything is drawn or clipped.
+    pub fn is_on(&self) -> bool {
+        self.clip || self.outline_width > 0.
+    }
+}
+
+/// One `work-area {}` section as parsed from the config.
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct WorkAreaPart {
+    #[knuffel(child, unwrap(argument))]
+    pub outline_width: Option<FloatOrInt<0, 1024>>,
+    #[knuffel(child)]
+    pub outline_color: Option<Color>,
+    #[knuffel(child, unwrap(argument))]
+    pub corner_radius: Option<FloatOrInt<0, 1024>>,
+    #[knuffel(child, unwrap(argument))]
+    pub clip: Option<bool>,
+}
+
+impl MergeWith<WorkAreaPart> for WorkArea {
+    fn merge_with(&mut self, part: &WorkAreaPart) {
+        if let Some(x) = part.outline_width {
+            self.outline_width = x.0;
+        }
+        if let Some(x) = part.outline_color {
+            self.outline_color = x;
+        }
+        if let Some(x) = part.corner_radius {
+            self.corner_radius = x.0;
+        }
+        if let Some(x) = part.clip {
+            self.clip = x;
+        }
+    }
+}
+
 /// How the focus is shown on canvas workspaces.
 #[derive(knuffel::DecodeScalar, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum FocusRingCanvasStyle {
@@ -328,6 +399,41 @@ where
 mod tests {
     use super::*;
     use crate::{Config, FocusRing};
+
+    #[test]
+    fn work_area_off_by_default_and_merges() {
+        let config = Config::parse_mem("").unwrap();
+        assert_eq!(config.layout.work_area, WorkArea::default());
+        assert!(!config.layout.work_area.is_on());
+
+        let config = Config::parse_mem(
+            r##"
+            layout {
+                work-area {
+                    outline-width 1
+                    outline-color "#2A2A27"
+                    corner-radius 12
+                    clip true
+                }
+            }
+            "##,
+        )
+        .unwrap();
+        let mut work_area = config.layout.work_area;
+        work_area.merge_with(&WorkAreaPart {
+            corner_radius: Some(FloatOrInt(8.)),
+            ..Default::default()
+        });
+        assert_eq!(
+            work_area,
+            WorkArea {
+                outline_width: 1.,
+                outline_color: Color::from_rgba8_unpremul(0x2a, 0x2a, 0x27, 0xff),
+                corner_radius: 8.,
+                clip: true,
+            }
+        );
+    }
 
     #[test]
     fn decorations_off_by_default() {

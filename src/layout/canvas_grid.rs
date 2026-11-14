@@ -242,6 +242,8 @@ pub struct CanvasDecorations {
     show_grid_shader: bool,
     background: SolidColorBuffer,
     show_background: bool,
+    /// Top-left of the grid and background (the working area clip, or the view origin).
+    area_loc: Point<f64, Logical>,
     regions: Vec<RegionDecor>,
 }
 
@@ -319,7 +321,9 @@ impl CanvasDecorations {
     /// Recomputes the elements for the current view.
     ///
     /// `transform` is `None` on strip workspaces. `settled_zoom` is the zoom the region labels
-    /// are rasterized for.
+    /// are rasterized for. With `clip` (the working area clip), the grid, the plane background
+    /// and the region outlines are laid out within it (the shader elements can't be cropped
+    /// afterwards: their patterns are computed from the element size).
     pub fn update_render_elements(
         &mut self,
         transform: Option<CanvasTransform>,
@@ -327,6 +331,7 @@ impl CanvasDecorations {
         scale: f64,
         settled_zoom: f64,
         config: &CanvasDecor,
+        clip: Option<Rectangle<f64, Logical>>,
     ) {
         let Some(transform) = transform else {
             self.visible = false;
@@ -334,19 +339,21 @@ impl CanvasDecorations {
         };
         self.visible = true;
         let zoom = transform.zoom;
+        let area = clip.unwrap_or_else(|| Rectangle::from_size(view_size));
+        self.area_loc = area.loc;
 
         // Grid and background.
         let grid_on = config.grid != CanvasGrid::Off && config.grid_spacing >= 1.;
         self.show_grid_shader = grid_on || config.background_color.is_some();
         self.show_background = config.background_color.is_some();
         if let Some(color) = config.background_color {
-            self.background.resize(view_size);
+            self.background.resize(area.size);
             self.background.set_color(color);
         }
         if self.show_grid_shader {
             let spacing = config.grid_spacing * zoom;
-            // View position of the plane origin, folded into one period.
-            let origin = transform.plane_to_view(Point::from((0., 0.)));
+            // View position of the plane origin relative to the element, folded into one period.
+            let origin = transform.plane_to_view(Point::from((0., 0.))) - area.loc;
             let (mode, min_width) = match config.grid {
                 CanvasGrid::Dots => (1., MIN_DOT_DIAMETER),
                 _ => (0., 1.),
@@ -357,7 +364,7 @@ impl CanvasDecorations {
                 (Color::default(), 0.)
             };
             self.grid.update(GridParams {
-                size: view_size,
+                size: area.size,
                 mode,
                 offset: [
                     origin.x.rem_euclid(spacing.max(1e-6)) as f32,
@@ -375,7 +382,7 @@ impl CanvasDecorations {
         // Regions, reusing the elements of regions with the same name.
         let regions = self.effective_regions(config);
         let mut old = std::mem::take(&mut self.regions);
-        let view_rect = Rectangle::from_size(view_size);
+        let view_rect = area;
         let text_scale = scale * settled_zoom.clamp(0.05, 4.);
         for region in regions {
             let mut decor = match old.iter().position(|r| r.name == region.name) {
@@ -411,11 +418,21 @@ impl CanvasDecorations {
                 ),
             ];
             for (i, (loc, size, mode)) in edges.into_iter().enumerate() {
+                // Within the clip, with the dash phase of the part that was cut off.
+                let edge = Rectangle::new(loc, size);
+                let (loc, size, offset) = match clip.map(|clip| edge.intersection(clip)) {
+                    None => (loc, size, [0., 0.]),
+                    Some(Some(part)) => {
+                        let cut = part.loc - loc;
+                        (part.loc, part.size, [cut.x as f32, cut.y as f32])
+                    }
+                    Some(None) => (loc, Size::from((0., 0.)), [0., 0.]),
+                };
                 decor.edge_locs[i] = loc;
                 decor.edges[i].update(GridParams {
                     size,
                     mode,
-                    offset: [0., 0.],
+                    offset,
                     spacing: 1.,
                     line_width: 0.,
                     min_width: 0.,
@@ -457,22 +474,20 @@ impl CanvasDecorations {
             }
             if has_shader {
                 for (edge, loc) in region.edges.iter().zip(region.edge_locs) {
-                    push(edge.clone().with_location(loc).into());
+                    // Edges cut away by the working area clip are empty.
+                    if edge.params.is_some_and(|p| p.size.w > 0. && p.size.h > 0.) {
+                        push(edge.clone().with_location(loc).into());
+                    }
                 }
             }
         }
 
         if has_shader && self.show_grid_shader {
-            push(
-                self.grid
-                    .clone()
-                    .with_location(Point::from((0., 0.)))
-                    .into(),
-            );
+            push(self.grid.clone().with_location(self.area_loc).into());
         } else if self.show_background {
             let elem = SolidColorRenderElement::from_buffer(
                 &self.background,
-                Point::from((0., 0.)),
+                self.area_loc,
                 1.,
                 Kind::Unspecified,
             );

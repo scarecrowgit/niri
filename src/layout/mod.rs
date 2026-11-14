@@ -90,6 +90,7 @@ pub mod shadow;
 pub mod tab_indicator;
 pub mod tile;
 pub mod title_bar; // rice
+pub mod work_area; // rice
 pub mod workspace;
 
 #[cfg(test)]

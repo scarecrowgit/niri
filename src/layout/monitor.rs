@@ -1779,6 +1779,30 @@ impl<W: LayoutElement> Monitor<W> {
             )
         };
 
+        // rice: working area outlines and corner masks above everything of their workspace.
+        if self.workspaces.iter().any(|ws| ws.has_work_area_decor()) {
+            let crop_bounds = if self.workspace_switch.is_some() || self.overview_progress.is_some()
+            {
+                Rectangle::new(
+                    Point::from((-i32::MAX / 2, 0)),
+                    Size::from((i32::MAX, height)),
+                )
+            } else {
+                Rectangle::new(
+                    Point::from((-i32::MAX / 2, -i32::MAX / 2)),
+                    Size::from((i32::MAX, i32::MAX)),
+                )
+            };
+            for (ws, geo) in self.workspaces_with_render_geo_cull(true) {
+                ws.render_work_area(ctx.renderer, &mut |elem| {
+                    if let Some(elem) = CropRenderElement::from_element(elem, scale, crop_bounds) {
+                        let elem = MonitorInnerRenderElement::from(elem);
+                        push(scale_relocate(geo, elem));
+                    }
+                });
+            }
+        }
+
         // Draw in passes for correct Z ordering during window movement between workspaces:
         // - floating windows moving between workspaces
         // - normal floating windows
@@ -1832,6 +1856,27 @@ impl<W: LayoutElement> Monitor<W> {
                     }};
                 }
 
+                // rice: the normal layer of a workspace may be clipped to its working area.
+                let clip_bounds = ws.work_area_clip().filter(|_| cull).map(|clip| {
+                    let clip = clip.to_physical_precise_round(scale);
+                    clip.intersection(crop_bounds).unwrap_or_default()
+                });
+                macro_rules! push_ws {
+                    () => {{
+                        &mut |elem: WorkspaceRenderElement<R>| {
+                            let bounds = match clip_bounds {
+                                Some(bounds) if ws.work_area_clips(&elem) => bounds,
+                                _ => crop_bounds,
+                            };
+                            let elem = CropRenderElement::from_element(elem, scale, bounds);
+                            if let Some(elem) = elem {
+                                let elem = MonitorInnerRenderElement::from(elem);
+                                push(scale_relocate(geo, elem));
+                            }
+                        }
+                    }};
+                }
+
                 let xray_pos = XrayPos::new(geo.loc, zoom);
 
                 match pass {
@@ -1850,7 +1895,7 @@ impl<W: LayoutElement> Monitor<W> {
                             xray_pos,
                             focus_ring,
                             RenderLayer::Normal,
-                            push!(),
+                            push_ws!(),
                         );
 
                         if let Some(loc) = insert_hint_render_loc {
@@ -1878,7 +1923,7 @@ impl<W: LayoutElement> Monitor<W> {
                             xray_pos,
                             focus_ring,
                             RenderLayer::Normal,
-                            push!(),
+                            push_ws!(),
                         );
                     }
                 }

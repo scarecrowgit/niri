@@ -461,6 +461,8 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) zoom_gesture: Option<f64>,
     /// rice: plane grid and named regions (runtime regions and render state).
     pub(super) decor: super::canvas_grid::CanvasDecorations,
+    /// rice: working area outline and clip (not canvas-specific; per-workspace rice state).
+    pub(super) work_area: super::work_area::WorkAreaDecor,
 }
 
 /// State of a direct-manipulation pan of a canvas view.
@@ -488,7 +490,8 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             cascade: None,
             pan_gesture: None,
             zoom_gesture: None,
-            decor: Default::default(), // rice
+            decor: Default::default(),     // rice
+            work_area: Default::default(), // rice
         }
     }
 }

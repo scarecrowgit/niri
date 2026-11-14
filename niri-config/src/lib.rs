@@ -52,7 +52,8 @@ pub use crate::binds::*;
 pub use crate::canvas::{Canvas, CanvasPart, WorkspaceMode};
 pub use crate::debug::Debug;
 pub use crate::decorations::{
-    CanvasDecor, CanvasGrid, CanvasRegion, FocusRingCanvasStyle, TitleBar, TitleBarPart,
+    CanvasDecor, CanvasGrid, CanvasRegion, FocusRingCanvasStyle, TitleBar, TitleBarPart, WorkArea,
+    WorkAreaPart,
 }; // rice
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::Gestures;
@@ -2071,6 +2072,17 @@ mod tests {
                         b: 0.15294118,
                         a: 1.0,
                     },
+                },
+                work_area: WorkArea {
+                    outline_width: 0.0,
+                    outline_color: Color {
+                        r: 0.16470589,
+                        g: 0.16470589,
+                        b: 0.15294118,
+                        a: 1.0,
+                    },
+                    corner_radius: 0.0,
+                    clip: false,
                 },
             },
             prefer_no_csd: true,

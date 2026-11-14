@@ -19,6 +19,7 @@ mod canvas; // rice
 mod decorations; // rice
 mod fullscreen;
 mod scratch; // rice
+mod work_area; // rice
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -811,6 +812,8 @@ enum Op {
     Scratch(ScratchOp),
     // rice: canvas pointer and gesture input (nested to keep the Op strategy small).
     CanvasInput(CanvasInputOp),
+    // rice: render element updates (working area clip, canvas decorations).
+    UpdateRenderElements,
 }
 
 /// rice: hidden (scratchpad) workspace operations.
@@ -1858,6 +1861,7 @@ impl Op {
             }
             Op::Scratch(op) => op.apply(layout), // rice
             Op::CanvasInput(op) => op.apply(layout),
+            Op::UpdateRenderElements => layout.update_render_elements(None), // rice
         }
     }
 }
@@ -4273,6 +4277,22 @@ prop_compose! {
     }
 }
 
+// rice: working area outline and clip.
+prop_compose! {
+    fn arbitrary_work_area()(
+        outline_width in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+        corner_radius in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
+        clip in prop::option::of(any::<bool>()),
+    ) -> niri_config::WorkAreaPart {
+        niri_config::WorkAreaPart {
+            outline_width,
+            corner_radius,
+            clip,
+            ..Default::default()
+        }
+    }
+}
+
 prop_compose! {
     fn arbitrary_layout_part()(
         gaps in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
@@ -4286,10 +4306,12 @@ prop_compose! {
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
         default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
         title_bar in prop::option::of(arbitrary_title_bar()), // rice
+        work_area in prop::option::of(arbitrary_work_area()), // rice
     ) -> niri_config::LayoutPart {
         niri_config::LayoutPart {
             default_workspace_mode,
             title_bar,
+            work_area,
             gaps,
             struts,
             center_focused_column,

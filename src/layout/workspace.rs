@@ -52,6 +52,8 @@ mod canvas_ext;
 mod scratch_ext;
 // rice: canvas plane grid and regions.
 mod canvas_decor;
+// rice: working area outline and clip.
+mod work_area_ext;
 
 #[derive(Debug)]
 pub struct Workspace<W: LayoutElement> {
@@ -167,6 +169,8 @@ niri_render_elements! {
         Canvas = RescaleRenderElement<FloatingSpaceRenderElement<R>>,
         // rice: canvas plane grid and regions.
         CanvasDecor = CanvasDecorRenderElement,
+        // rice: working area outline and corner masks.
+        WorkArea = crate::layout::work_area::WorkAreaRenderElement,
     }
 }
 
@@ -436,6 +440,7 @@ impl<W: LayoutElement> Workspace<W> {
                 1.,
             );
 
+            self.update_work_area_decor(); // rice
             self.canvas_update_decorations(); // rice
         }
     }
@@ -491,6 +496,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.floating.update_shaders();
         self.shadow.update_shaders();
         self.canvas.decor.update_shaders(); // rice
+        self.canvas.work_area.update_shaders(); // rice
     }
 
     pub fn windows(&self) -> impl Iterator<Item = &W> + '_ {

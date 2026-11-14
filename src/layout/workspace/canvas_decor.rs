@@ -44,6 +44,7 @@ impl<W: LayoutElement> Workspace<W> {
             self.scale.fractional_scale(),
             self.canvas.frame_zoom,
             &self.options.layout.canvas.decor,
+            self.canvas.work_area.clip(),
         );
     }
 
