@@ -170,6 +170,8 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `src/layout/workspace/scratch_ext.rs` | child module of `workspace`: `is_hidden`/`set_hidden`, origin hooks for tiles entering/leaving a workspace |
 | `src/input/scratch_actions.rs` | `State::do_scratch_action` (`hide-window`, `unhide-window`) |
 | `src/layout/tests/scratch.rs` | hidden workspace tests |
+| `src/layout/ws_by_index.rs` | `create-workspaces-by-index`: creating workspaces by index, trailing-only clean-up (see "Workspaces by index") |
+| `src/layout/tests/ws_by_index.rs`, `src/tests/ashd_mru.rs` | by-index layout tests; recent-windows quick-tap tests |
 
 ### Upstream files touched
 
@@ -195,6 +197,7 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `src/ui/mru.rs` | skip hidden workspaces | scratchpad |
 | `src/input/mod.rs` (scratchpad) | `mod scratch_actions`; one match arm | actions |
 | `niri-config/src/workspace.rs` | `hidden` flag + parse tests | config |
+| `src/layout/{monitor,mod}.rs`, `niri-config/src/{layout,workspace,lib}.rs` (by index) | see "Workspaces by index" | `create-workspaces-by-index` |
 | `niri-config/src/{lib,layout,animations,binds}.rs` | `mod canvas`, layout/animation fields, `Animation::decode_node` made `pub(crate)`, new bind actions; the big `parse` snapshot gained the new default fields | config |
 
 ## Public API for follow-up work
@@ -808,7 +811,8 @@ With hidden workspaces, index references count the *visible* workspaces only:
   is 1…n over the visible
   workspaces of the active monitor (of the window's monitor for
   `move-window-to-workspace --window-id`). Indices past the end still clamp to the last
-  workspace like upstream.
+  workspace like upstream, unless `create-workspaces-by-index` is on (see "Workspaces by
+  index" below).
 - IPC `Workspace.idx`: the same visual index; **0 for hidden workspaces** (address them by
   name or id). `niri msg workspaces` lists hidden workspaces last, with `-` as index.
 - ext-workspace: hidden workspaces are not announced; coordinates/default names are visual.
@@ -1140,3 +1144,71 @@ with a constant on-screen size (e.g. 12 px) over the top of the scaled strip, fr
 title-text texture cache rasterized at output scale (not × zoom), ellipsized to the scaled tile
 width and culled when that is narrower than ~40 px. One extra texture element per visible
 window, re-rasterized only when the title or the tile width bucket changes.
+
+## Workspaces by index
+
+Opt-in layout option (off by default, so upstream behaviour and upstream tests are unchanged):
+
+```kdl
+layout {
+    create-workspaces-by-index
+}
+```
+
+Upstream keeps exactly one empty workspace at the end of each monitor and removes every other
+empty unnamed workspace, so `focus-workspace 5` with two workspaces lands on the third (empty)
+one. With the option:
+
+- `focus-workspace N` (also with `workspace-auto-back-and-forth`), `move-window-to-workspace N`
+  (also `--window-id`, counted on the window's monitor) and `move-column-to-workspace N` with N
+  past the last workspace first append empty workspaces up to index N, then go / move there. N
+  counts the visible workspaces like every index reference in the fork (the hidden scratchpad
+  is skipped). A move with nothing to move creates nothing.
+- An empty unnamed workspace survives while a workspace *after* it is in use: has windows, is
+  named (and visible), or is the active workspace of the monitor. Only the trailing empty
+  workspaces are removed, back to the single empty workspace niri always keeps at the end.
+  Closing the last window of the highest workspace (while another one is focused), or leaving
+  a high empty workspace, trims back to the last used one.
+- Hidden workspaces are named, so they are never removed; they don't count as "in use" either,
+  so they don't keep the empty workspaces before them alive.
+- Workspace numbers therefore don't shift: closing every window of workspace 2 while workspace
+  3 has windows leaves workspace 2 empty in place.
+- Name-, id- and up/down references, `move-workspace-to-index N` and output moves are unchanged
+  (they still clamp). When a monitor is removed, its empty workspaces are dropped like upstream
+  (only workspaces with windows or a name move to another monitor).
+- A layout option like `empty-workspace-above-first`: it merges per output
+  (`output { layout { … } }`) and is rejected in `workspace "x" { layout { … } }`. Turning it
+  off at runtime removes the empty workspaces in the middle right away (after a running
+  workspace switch).
+
+IPC: no type changes. The `Workspaces` list / `WorkspacesChanged` simply contain empty
+workspaces in the middle now (`active_window_id: null`); `idx` stays the visual index.
+
+Code: `src/layout/ws_by_index.rs` (`Monitor::ensure_workspace_for_index`,
+`ensure_workspace_for_move`, `clean_up_workspaces_by_index`, `by_index_trim_start`,
+invariants). Upstream files: `src/layout/monitor.rs` (`clean_up_workspaces` dispatches to the
+by-index variant; `switch_workspace`, `switch_workspace_auto_back_and_forth`,
+`move_to_workspace`, `move_column_to_workspace` create the target first; `update_config`
+cleans up when the option changes; `verify_invariants` checks the relaxed rule when the option
+is on), `src/layout/mod.rs` (`mod ws_by_index`; `remove_window` runs the by-index clean-up
+instead of removing the emptied workspace), `niri-config/src/{layout,workspace,lib}.rs`
+(option, per-workspace rejection, parse test, parse snapshot). Tests:
+`src/layout/tests/ws_by_index.rs` (focused tests and `WsIndexOp`, index references resolved
+like the input code), `src/layout/tests.rs` (`Op::WsIndex`, the option in
+`arbitrary_layout_part`, so it is randomized for the layout, per output and through
+`Op::UpdateConfig`; an `UpdateConfig` turning it on and `WsIndex(Focus(4))` in both exhaustive
+op lists).
+
+## Recent-windows switcher (no code change)
+
+Checked for the report "quick Super+Tab does nothing": a quick tap (key events well inside the
+150 ms open delay and the 750 ms focus debounce) switches to the previous window, repeated taps
+toggle between the two most recent windows, and holding Mod while tapping Tab walks the list,
+on strip and canvas workspaces (`src/tests/ashd_mru.rs`, also checked in the nested session
+with a virtual keyboard). The debounce does not lose quick back-and-forth: opening the switcher
+commits the pending focus first (`mru_apply_keyboard_commit`). What does break quick taps is
+upstream's sticky scope: W / O / S pressed while the switcher is open (e.g. Super+W with Super
+still held) set the scope for every later open by a bind without `scope=`; on a workspace with
+one window a quick Super+Tab then has nothing to switch to. Configs should give the binds an
+explicit `scope="all"` (the ashd NixOS config does); the test shows both behaviours.
+

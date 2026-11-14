@@ -20,6 +20,9 @@ mod decorations; // ashd
 mod fullscreen;
 mod scratch; // ashd
 mod work_area; // ashd
+mod ws_by_index; // ashd
+
+use ws_by_index::WsIndexOp; // ashd
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -814,6 +817,8 @@ enum Op {
     CanvasInput(CanvasInputOp),
     // ashd: render element updates (working area clip, canvas decorations).
     UpdateRenderElements,
+    // ashd: index references resolved like the input code does (create-workspaces-by-index).
+    WsIndex(WsIndexOp),
 }
 
 /// ashd: hidden (scratchpad) workspace operations.
@@ -1862,6 +1867,7 @@ impl Op {
             Op::Scratch(op) => op.apply(layout), // ashd
             Op::CanvasInput(op) => op.apply(layout),
             Op::UpdateRenderElements => layout.update_render_elements(None), // ashd
+            Op::WsIndex(op) => op.apply(layout),                             // ashd
         }
     }
 }
@@ -2113,6 +2119,14 @@ fn operations_dont_panic() {
         }),
         Op::Scratch(ScratchOp::HideWindow { id: None }),
         Op::Scratch(ScratchOp::UnhideWindow { id: None }),
+        // ashd: create-workspaces-by-index.
+        Op::UpdateConfig {
+            layout_config: Box::new(niri_config::LayoutPart {
+                create_workspaces_by_index: Some(Flag(true)),
+                ..Default::default()
+            }),
+        },
+        Op::WsIndex(WsIndexOp::Focus(4)),
     ];
 
     for third in &every_op {
@@ -2303,6 +2317,14 @@ fn operations_from_starting_state_dont_panic() {
         }),
         Op::Scratch(ScratchOp::HideWindow { id: None }),
         Op::Scratch(ScratchOp::UnhideWindow { id: None }),
+        // ashd: create-workspaces-by-index.
+        Op::UpdateConfig {
+            layout_config: Box::new(niri_config::LayoutPart {
+                create_workspaces_by_index: Some(Flag(true)),
+                ..Default::default()
+            }),
+        },
+        Op::WsIndex(WsIndexOp::Focus(4)),
     ];
 
     for third in &every_op {
@@ -4305,6 +4327,7 @@ prop_compose! {
         center_focused_column in prop::option::of(arbitrary_center_focused_column()),
         always_center_single_column in prop::option::of(any::<bool>().prop_map(Flag)),
         empty_workspace_above_first in prop::option::of(any::<bool>().prop_map(Flag)),
+        create_workspaces_by_index in prop::option::of(any::<bool>().prop_map(Flag)), // ashd
         default_workspace_mode in prop::option::of(arbitrary_workspace_mode()),
         title_bar in prop::option::of(arbitrary_title_bar()), // ashd
         work_area in prop::option::of(arbitrary_work_area()), // ashd
@@ -4318,6 +4341,7 @@ prop_compose! {
             center_focused_column,
             always_center_single_column,
             empty_workspace_above_first,
+            create_workspaces_by_index,
             focus_ring,
             border,
             shadow,

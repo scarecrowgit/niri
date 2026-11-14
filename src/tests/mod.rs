@@ -7,6 +7,7 @@ mod test_input_backend;
 
 mod animations;
 mod ashd_focus; // ashd
+mod ashd_mru; // ashd
 mod binds;
 mod canvas_input; // ashd
 mod floating;
