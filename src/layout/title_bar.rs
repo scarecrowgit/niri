@@ -270,10 +270,15 @@ impl TitleBar {
         location: Point<f64, Logical>,
     ) -> Option<PrimaryGpuTextureRenderElement> {
         let area = self.text_area();
-        let key = self.text_key(area)?;
 
         let mut cache = self.text.borrow_mut();
-        if cache.key.as_ref() != Some(&key) {
+        // Compare without building a key (no allocations in the per-frame path).
+        if !cache
+            .key
+            .as_ref()
+            .is_some_and(|key| self.text_key_matches(key, area))
+        {
+            let key = self.text_key(area)?;
             cache.texture = render_text(renderer, &key)
                 .map_err(|err| trace!("error rendering title bar text: {err:?}"))
                 .ok();
@@ -300,6 +305,26 @@ impl TitleBar {
             Kind::Unspecified,
         );
         Some(PrimaryGpuTextureRenderElement(elem))
+    }
+
+    /// Whether `key` is what `text_key(area)` would return.
+    fn text_key_matches(&self, key: &TextKey, area: Rectangle<f64, Logical>) -> bool {
+        let clean = |text: &Option<String>, cached: &str| {
+            let text = text.as_deref().unwrap_or("");
+            text.chars()
+                .map(|c| if c == '\n' { ' ' } else { c })
+                .eq(cached.chars())
+        };
+        let scale = self.text_scale;
+        key.scale == scale
+            && key.width == ((area.size.w * scale).round() as i32).min(MAX_TEXTURE_SIZE)
+            && key.height == ((area.size.h * scale).round() as i32).min(MAX_TEXTURE_SIZE)
+            && key.gap == (self.padding * scale).round() as i32
+            && key.text_color == self.config.text_color
+            && key.muted_color == self.config.muted_color
+            && key.font == self.config.font
+            && clean(&self.title, &key.title)
+            && clean(&self.subtitle, &key.subtitle)
     }
 
     fn text_key(&self, area: Rectangle<f64, Logical>) -> Option<TextKey> {

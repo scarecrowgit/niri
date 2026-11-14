@@ -1207,3 +1207,40 @@ fn move_to_workspace_animates_from_the_drawn_position() {
     assert!(pos.y <= drawn.y - height, "{pos:?} vs {drawn:?}");
     assert!(pos.y >= drawn.y - 1.5 * height, "{pos:?} vs {drawn:?}");
 }
+
+// rice: tiles (title strip text, frame widths) only see the settled zoom, so nothing is
+// re-rasterized per frame of a zoom animation; the text texture is scaled while animating.
+#[test]
+fn tiles_keep_the_settled_zoom_during_a_zoom_animation() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let settled = transform(&layout).zoom;
+    let tile_zoom = |layout: &Layout<TestWindow>| {
+        ws(layout)
+            .tiles()
+            .next()
+            .unwrap()
+            .options()
+            .canvas_tile_zoom
+    };
+    assert_eq!(tile_zoom(&layout), Some(settled));
+
+    // Start a zoom animation and advance it part of the way.
+    check_ops_on_layout(&mut layout, [Op::CanvasSetZoom(1.)]);
+    layout
+        .clock
+        .set_unadjusted(layout.clock.now_unadjusted() + Duration::from_millis(30));
+    layout.advance_animations();
+    layout.update_render_elements(None);
+    let current = ws(&layout).canvas_transform().unwrap().zoom;
+    assert!(current > settled && current < 1., "zoom {current}");
+    assert_eq!(tile_zoom(&layout), Some(settled));
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    layout.update_render_elements(None);
+    assert_eq!(tile_zoom(&layout), Some(1.));
+}
