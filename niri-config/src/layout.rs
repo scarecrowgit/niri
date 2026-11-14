@@ -86,6 +86,7 @@ impl MergeWith<LayoutPart> for Layout {
             canvas,
             title_bar, // rice
             work_area, // rice
+            struts,    // rice: per side
         );
 
         merge_clone!(
@@ -94,7 +95,6 @@ impl MergeWith<LayoutPart> for Layout {
             preset_window_heights,
             center_focused_column,
             default_column_display,
-            struts,
             background_color,
             fullscreen_backdrop_color,
             default_workspace_mode,
@@ -142,8 +142,9 @@ pub struct LayoutPart {
     pub default_column_display: Option<ColumnDisplay>,
     #[knuffel(child, unwrap(argument))]
     pub gaps: Option<FloatOrInt<0, 65535>>,
+    // rice: merged per side.
     #[knuffel(child)]
-    pub struts: Option<Struts>,
+    pub struts: Option<StrutsPart>,
     #[knuffel(child)]
     pub background_color: Option<Color>,
     #[knuffel(child)]
@@ -191,6 +192,51 @@ pub struct Struts {
     pub bottom: FloatOrInt<-65535, 65535>,
 }
 
+/// rice: one `struts {}` section as parsed from the config.
+///
+/// Struts merge per side: a later `struts {}` block (another included file, or a per-output or
+/// per-workspace `layout {}`) only overrides the sides it names, so a theme file can set `top`
+/// without losing a host-configured `left`.
+#[derive(knuffel::Decode, Debug, Default, Clone, Copy, PartialEq)]
+pub struct StrutsPart {
+    #[knuffel(child, unwrap(argument))]
+    pub left: Option<FloatOrInt<-65535, 65535>>,
+    #[knuffel(child, unwrap(argument))]
+    pub right: Option<FloatOrInt<-65535, 65535>>,
+    #[knuffel(child, unwrap(argument))]
+    pub top: Option<FloatOrInt<-65535, 65535>>,
+    #[knuffel(child, unwrap(argument))]
+    pub bottom: Option<FloatOrInt<-65535, 65535>>,
+}
+
+impl From<Struts> for StrutsPart {
+    fn from(struts: Struts) -> Self {
+        Self {
+            left: Some(struts.left),
+            right: Some(struts.right),
+            top: Some(struts.top),
+            bottom: Some(struts.bottom),
+        }
+    }
+}
+
+impl MergeWith<StrutsPart> for Struts {
+    fn merge_with(&mut self, part: &StrutsPart) {
+        if let Some(x) = part.left {
+            self.left = x;
+        }
+        if let Some(x) = part.right {
+            self.right = x;
+        }
+        if let Some(x) = part.top {
+            self.top = x;
+        }
+        if let Some(x) = part.bottom {
+            self.bottom = x;
+        }
+    }
+}
+
 #[derive(knuffel::DecodeScalar, Debug, Default, PartialEq, Eq, Clone, Copy)]
 pub enum CenterFocusedColumn {
     /// Focusing a column will not center the column.
@@ -227,5 +273,110 @@ where
         } else {
             Ok(Self(None))
         }
+    }
+}
+
+// rice: struts merge per side.
+#[cfg(test)]
+mod struts_tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::Config;
+
+    fn struts(left: f64, right: f64, top: f64, bottom: f64) -> Struts {
+        Struts {
+            left: FloatOrInt(left),
+            right: FloatOrInt(right),
+            top: FloatOrInt(top),
+            bottom: FloatOrInt(bottom),
+        }
+    }
+
+    /// Writes `files` into a fresh directory and parses the first one.
+    fn parse_files(name: &str, files: &[(&str, &str)]) -> Config {
+        let dir: PathBuf =
+            std::env::temp_dir().join(format!("niri-config-struts-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for (file, text) in files {
+            std::fs::write(dir.join(file), text).unwrap();
+        }
+        let path = dir.join(files[0].0);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let config = Config::parse(&path, &text).config.unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        config
+    }
+
+    #[test]
+    fn struts_merge_per_side_across_includes() {
+        // The host sets left and top; the theme fragment, included after, sets only top.
+        let config = parse_files(
+            "include",
+            &[
+                (
+                    "config.kdl",
+                    r#"
+                    layout {
+                        struts {
+                            left 64
+                            top 46
+                        }
+                    }
+                    include "theme.kdl"
+                    "#,
+                ),
+                (
+                    "theme.kdl",
+                    r#"
+                    layout {
+                        struts {
+                            top 58
+                        }
+                    }
+                    "#,
+                ),
+            ],
+        );
+        assert_eq!(config.layout.struts, struts(64., 0., 58., 0.));
+    }
+
+    #[test]
+    fn struts_in_one_block_and_defaults() {
+        let config = Config::parse_mem("").unwrap();
+        assert_eq!(config.layout.struts, Struts::default());
+
+        let config = Config::parse_mem(
+            r#"
+            layout {
+                struts {
+                    left 1
+                    right 2
+                    top 3
+                    bottom -4
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.layout.struts, struts(1., 2., 3., -4.));
+    }
+
+    #[test]
+    fn struts_overrides_merge_per_side() {
+        let mut layout = Layout::default();
+        layout.merge_with(&LayoutPart {
+            struts: Some(StrutsPart::from(struts(10., 20., 30., 40.))),
+            ..Default::default()
+        });
+        // Like a per-output `layout { struts { top 0 } }`.
+        layout.merge_with(&LayoutPart {
+            struts: Some(StrutsPart {
+                top: Some(FloatOrInt(0.)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        });
+        assert_eq!(layout.struts, struts(10., 20., 0., 40.));
     }
 }

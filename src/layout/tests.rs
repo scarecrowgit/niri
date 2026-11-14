@@ -4153,18 +4153,19 @@ fn arbitrary_spacing_neg() -> impl Strategy<Value = f64> {
     prop_oneof![Just(0.), Just(4.), Just(-4.), ((1.)..=65535.)]
 }
 
-fn arbitrary_struts() -> impl Strategy<Value = Struts> {
+// rice: struts merge per side.
+fn arbitrary_struts_part() -> impl Strategy<Value = niri_config::StrutsPart> {
     (
-        arbitrary_spacing_neg(),
-        arbitrary_spacing_neg(),
-        arbitrary_spacing_neg(),
-        arbitrary_spacing_neg(),
+        prop::option::of(arbitrary_spacing_neg()),
+        prop::option::of(arbitrary_spacing_neg()),
+        prop::option::of(arbitrary_spacing_neg()),
+        prop::option::of(arbitrary_spacing_neg()),
     )
-        .prop_map(|(left, right, top, bottom)| Struts {
-            left: FloatOrInt(left),
-            right: FloatOrInt(right),
-            top: FloatOrInt(top),
-            bottom: FloatOrInt(bottom),
+        .prop_map(|(left, right, top, bottom)| niri_config::StrutsPart {
+            left: left.map(FloatOrInt),
+            right: right.map(FloatOrInt),
+            top: top.map(FloatOrInt),
+            bottom: bottom.map(FloatOrInt),
         })
 }
 
@@ -4296,7 +4297,7 @@ prop_compose! {
 prop_compose! {
     fn arbitrary_layout_part()(
         gaps in prop::option::of(arbitrary_spacing().prop_map(FloatOrInt)),
-        struts in prop::option::of(arbitrary_struts()),
+        struts in prop::option::of(arbitrary_struts_part()), // rice: per side
         focus_ring in prop::option::of(arbitrary_focus_ring()),
         border in prop::option::of(arbitrary_border()),
         shadow in prop::option::of(arbitrary_shadow()),
