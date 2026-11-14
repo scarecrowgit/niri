@@ -4,7 +4,7 @@
 //!   releasing without a drag just activates it.
 //! - Double-click: in strip mode toggles the full width of the column (`maximize-column`); on a
 //!   canvas zooms to 100% centred on the window, or fits all windows when already at 100%.
-//! - Other buttons do nothing for now.
+//! - Other buttons do nothing (they don't activate the window either).
 
 use smithay::input::pointer::{CursorIcon, Focus, GrabStartData as PointerGrabStartData};
 use smithay::utils::{Logical, Point, Serial};
@@ -16,6 +16,25 @@ use crate::niri::State;
 use crate::utils::get_monotonic_time;
 
 impl State {
+    /// Whether a press of a button other than the left one, without Mod, is on a title bar.
+    ///
+    /// Such presses do nothing: they don't activate the window either (the strip is not part of
+    /// the window, so it gets no event). Mod+RMB resizing works on the strip as on the rest of
+    /// the tile.
+    pub(super) fn title_bar_ignores_press(
+        &self,
+        is_left: bool,
+        mod_down: bool,
+        location: Point<f64, Logical>,
+    ) -> bool {
+        !is_left
+            && !mod_down
+            && matches!(
+                self.niri.contents_under(location).window,
+                Some((_, HitType::TitleBar))
+            )
+    }
+
     /// Handles a left button press at `location`; returns whether it was on a title bar.
     pub(super) fn title_bar_press(
         &mut self,

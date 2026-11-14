@@ -3542,7 +3542,13 @@ impl State {
                     }
                 }
 
-                if !is_overview_open {
+                // rice: other buttons than the left one do nothing on a title bar.
+                let ignored = self.title_bar_ignores_press(
+                    button == Some(MouseButton::Left),
+                    mod_down,
+                    pointer.current_location(),
+                );
+                if !is_overview_open && !ignored {
                     self.niri.layout.activate_window(&window);
                 }
 
