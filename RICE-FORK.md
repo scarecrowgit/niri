@@ -355,10 +355,13 @@ workspace "scratch" {
 }
 ```
 
-A named workspace with `hidden` keeps its real index on its monitor (IPC `idx`,
-`focus-workspace N`, `move-window-to-workspace N` still count it), but:
+A named workspace with `hidden` keeps its place in its monitor's workspace list, but it does
+not count for index references: `focus-workspace N`, `move-window/column-to-workspace N`,
+`move-workspace-to-index N`, `set/unset-workspace-name` with an index and IPC `Workspace.idx` use
+1-based *visual* indices over the visible workspaces of the monitor (see "Workspace indices"
+below). Hidden workspaces have IPC `idx` 0 and are addressed by name or id. Moreover:
 
-- it never becomes the active workspace: `focus-workspace "scratch"` (by name, index or id) is a
+- it never becomes the active workspace: `focus-workspace "scratch"` (by name or id) is a
   **no-op** (it may still move the focus to the monitor the scratch workspace is on);
   `focus-workspace-up/down`, `focus-window-or-workspace-up/down`, `focus-workspace-previous`,
   `move-window/column-to-workspace-up/down`, `move-workspace-up/down`, workspace-switch
@@ -388,11 +391,11 @@ column right of the focused one.
 
 For the scratchpad list: `Windows` / `WindowOpenedOrChanged` report hidden windows with the
 hidden workspace's `workspace_id` and `hidden_from_workspace_id`; `Workspace.is_hidden` tells
-which workspaces are hidden. `niri msg workspaces` marks them `(hidden)` (and canvas ones
-`(canvas)`).
+which workspaces are hidden. `niri msg workspaces` lists them last, with `-` instead of an
+index, marked `(hidden)` (and canvas ones `(canvas)`).
 
-Not covered: the ext-workspace protocol (`ext_workspace.rs`) still announces hidden workspaces
-to third-party bars; activating one there is a no-op.
+The ext-workspace protocol (`ext_workspace.rs`) does not announce hidden workspaces; its
+coordinates and the default names of unnamed workspaces use the visual index.
 
 ## Building and running nested
 
@@ -409,15 +412,15 @@ cargo fmt --all -- --check
 ```
 
 Never run a development build against the live session (no TTY/DRM, never with the inherited
-`WAYLAND_DISPLAY`). Runtime checks use a nested session: a headless sway
-(`WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1`) in a private `XDG_RUNTIME_DIR` with a
-private D-Bus session, and the built `niri -c test.kdl` started inside it with
-`WAYLAND_DISPLAY` pointing at sway (winit backend), the live `WAYLAND_DISPLAY`, `NIRI_SOCKET`,
-`DISPLAY` and `DBUS_SESSION_BUS_ADDRESS` unset — the same technique as
-`nix-new/rice/xtask/scripts/nested-session.sh`. Then drive it with
-`NIRI_SOCKET=<nested socket> niri msg action ...` (e.g. `spawn -- foot`, `toggle-workspace-mode`,
-`canvas-zoom-out`, `canvas-fit`, `focus-column-left`, `screenshot-screen` with a
-`screenshot-path` pointing at a scratch directory).
+`WAYLAND_DISPLAY` or `NIRI_SOCKET`). Runtime checks use the nested session of the rice test
+harness (`nix-new/rice/xtask`, see its README): `NIRI=<debug niri> SWAY=… cargo xtask nested
+start --niri-config test.kdl` prints a root `/tmp/rice-nested.XXXXXX`; `cargo xtask nested env
+<root>` gives the scrubbed environment (headless sway, niri on winit inside it, private
+`XDG_RUNTIME_DIR`). Before every `niri msg …` check that `NIRI_SOCKET` lies under that root.
+Pointer and keyboard input can be driven with any `zwlr_virtual_pointer_v1` /
+`zwp_virtual_keyboard_v1` client connected to the nested `WAYLAND_DISPLAY` (in the nested
+session Mod is Alt). `niri msg action screenshot-screen --path <file> --copy-to-clipboard false
+--notify false` takes stills.
 
 ## Known limitations and deviations
 
@@ -429,25 +432,23 @@ private D-Bus session, and the built `niri -c test.kdl` started inside it with
   landing at the viewport centre; tiled windows and windows from other canvases land centred.
 - Pinned windows scale with the canvas; their unscaled view position is kept, so zooming moves
   them towards the view origin.
-- Frame width compensation adjusts the layout-level `border`/`focus-ring` widths; per-window-rule
-  widths are not compensated. Compensation is applied when the zoom settles, so frames are thin
-  during the zoom animation.
+- Frame width compensation applies to the layout-level and the window-rule `border`/`focus-ring`
+  widths. It is applied when the zoom settles, so frames are thin during the zoom animation.
 - `toggle-window-floating`, `move-window-to-floating/tiling` are no-ops for canvas windows. Column
   actions (consume/expel, column width presets, tabbed display) act on the floating window like
   on a stock floating window, or do nothing.
 - Windows opened while in canvas mode become strip columns with a fixed width equal to their
   current width when going back to strip mode (unless `open-floating true`).
-- The close animation of a canvas window stays at its unscaled position if the view pans during
-  it; the move-to-workspace transition animation of a canvas window starts from its unscaled
-  position. Both are short cosmetic glitches.
+- The close animation of a *pinned* canvas window moves with the plane if the view pans during
+  it (unpinned windows stay on their plane position, as they should).
 - In the overview, canvas windows outside the viewport show next to the workspace horizontally,
   like strip columns do (niri only crops vertically there).
 - Render culling keeps tiles within half a view size of the viewport; popups extending further
   from an off-screen parent are not drawn.
 - Changing `default-workspace-mode` affects workspaces created afterwards only.
-- Performance was not measured with a profiler; in the nested debug build panning/zooming
-  animations ran without visible artifacts. Every canvas frame re-renders all visible canvas
-  tiles (positions change every frame), the same cost class as a strip view-offset animation.
+- Performance was not measured with a profiler; see "Hot path" under "Fork polish" for CPU
+  numbers of the nested debug build. Every canvas frame re-renders all visible canvas tiles
+  (positions change every frame), the same cost class as a strip view-offset animation.
 
 ## Follow-ups
 
@@ -579,9 +580,9 @@ output to redraw). `Workspace`: the same per workspace plus `has_canvas_pan_gest
   regions checked against unscaled motion.
 - **Tablet** tools get scaled coordinates (their focus is recomputed per event); not tested on
   hardware.
-- The interactive-move tile switches between canvas zoom and full size abruptly when it crosses
-  between a canvas and a strip workspace (other monitor or the overview); popups of the moved
-  window are positioned for the unscaled window.
+- The interactive-move tile animates its size (canvas-zoom animation) when it crosses between
+  workspaces with different zooms; popups of the moved window are positioned for the unscaled
+  window.
 - Pinch zoom needs 3+ fingers, Mod, or the empty plane, to keep two-finger pinches for apps.
 - `if-canvas` checks the focused workspace, also for pointer binds.
 - Runtime-tested in the nested session (winit backend, virtual pointer/keyboard) with foot:
@@ -728,14 +729,17 @@ regions) updates live (text textures are keyed by their colours and re-rendered)
   (like borders).
 - **Input**: the strip is part of the tile for hit-testing (`HitType::TitleBar`, kept through
   canvas zoom and the overview downgrade). Left press activates and starts a move grab
-  (dragging moves the window like Mod+drag; a click without drag just activates); a double
-  click toggles `maximize-column` in strip mode, and on a canvas zooms to 100% centred on the
-  window, or fits all windows when already at 100%. Other buttons do nothing. Mod+RMB resize
-  edges are computed on the whole tile as before.
+  (dragging moves the window like Mod+drag, keeping the grab point on the strip; a click without
+  drag just activates); a double click toggles `maximize-column` in strip mode, and on a canvas
+  zooms to 100% centred on the window, or fits all windows when already at 100%. Other buttons
+  do nothing (they don't activate the window either). Mod+RMB resize edges are computed on the
+  whole tile as before, so Mod+RMB on the strip resizes from the top edge.
 - **Focus ring gap**: the ring is drawn around the tile grown by `gap` on every side, always as
   a border (never as a background fill, which would paint the gap), with concentric corners
   (outer radius = window radius + gap + width; square windows get `gap + width`). Gap is
-  rounded to physical pixels; under canvas zoom it scales with the tile.
+  rounded to physical pixels; under canvas zoom it scales with the tile. The tab indicator of a
+  tabbed column is moved out by the ring's gap and width (and gets that much more room with
+  `place-within-column`), unless its own `gap` is negative.
 - **Canvas grid**: one shader element (`canvas_grid.frag`) covering the workspace view under
   all windows, computed from the current canvas transform: pixel-snapped lines at least one
   physical pixel wide, or anti-aliased dots (min 2 physical px), fading out when the spacing
@@ -769,10 +773,8 @@ regions) updates live (text textures are keyed by their colours and re-rendered)
 
 ### Limitations
 
-- Pointer interaction with the strip (drag, double click) is implemented but was not
-  exercised in the nested session (it has no input devices); it is covered only by the
-  hit-test unit tests.
-- The tab indicator of a tabbed column sits inside the focus ring gap.
+- Pointer interaction with the strip was verified in the nested session with a virtual pointer
+  and keyboard (see "Fork polish" below) and is covered by client-level tests.
 - During a fullscreen/maximize animation the strip fades out at full height above the window
   instead of shrinking.
 - Strip text is not re-rasterized for the overview zoom (scaled texture).
@@ -780,3 +782,263 @@ regions) updates live (text textures are keyed by their colours and re-rendered)
   state yet; region labels are not hit-testable.
 - New-window size presets subtract the unrounded strip height (like niri does for borders),
   so at fractional scales a preset can be off by under one physical pixel.
+
+## Fork polish: indices, focus, quiet screenshots, work area, struts, strip input
+
+Fixes for rough edges reported by the shell and config authors. Everything that changes
+behaviour is opt-in, except the workspace indices with hidden workspaces (no change without
+hidden workspaces), the per-side `struts` merge, the focus fixes and the cosmetic fixes.
+
+### Workspace indices
+
+With hidden workspaces, index references count the *visible* workspaces only:
+
+- `focus-workspace N`, `move-window-to-workspace N`, `move-column-to-workspace N`,
+  `move-workspace-to-index N` (both the target index and `--reference N`), the workspace reference
+  of `move-workspace-to-monitor`, `set-workspace-name --workspace N`, `unset-workspace-name N`: N
+  is 1…n over the visible
+  workspaces of the active monitor (of the window's monitor for
+  `move-window-to-workspace --window-id`). Indices past the end still clamp to the last
+  workspace like upstream.
+- IPC `Workspace.idx`: the same visual index; **0 for hidden workspaces** (address them by
+  name or id). `niri msg workspaces` lists hidden workspaces last, with `-` as index.
+- ext-workspace: hidden workspaces are not announced; coordinates/default names are visual.
+- Switch animations, gestures, the hot corner and the overview already used visual indices.
+
+So the NixOS config binds `Super+N` to `focus-workspace N` again (drop the `N+1` workaround),
+on every monitor.
+
+Code: `Layout::resolve_workspace_index`, `Layout::ipc_workspace_idx`,
+`scratch::{visual_ws_idx, real_ws_idx}` (`src/layout/scratch.rs`),
+`Niri::find_output_and_workspace_index_for` (`src/niri.rs`). The layout keeps working with real
+indices; conversion happens where references are resolved.
+
+### On-demand layer focus
+
+A layer surface with on-demand keyboard interactivity keeps the keyboard after it was clicked.
+Explicit window focus now takes it back, like upstream's directional and workspace focus
+actions already did: `focus-window`, `focus-window-previous`, `unhide-window`, the
+recent-windows switcher (all through `State::focus_window()`), `focus-floating`,
+`focus-tiling`, `switch-focus-between-floating-and-tiling`, and any action after which the
+focused workspace is a different one (e.g. `move-window-to-workspace` with focus). xdg-activation,
+foreign-toplevel activation and focus-follows-mouse into a window already cleared it (now covered
+by tests, including FFM back into the window that kept the layout focus). Clicks keep upstream
+behaviour; plain pointer motion without focus-follows-mouse leaves the layer focus alone.
+Code: `src/input/layer_focus_hook.rs`; tests: `src/tests/rice_focus.rs`.
+
+### Quiet screenshots
+
+| IPC action | New fields (appended, `#[serde(default = true)]`) | CLI | bind property |
+| --- | --- | --- | --- |
+| `Screenshot { show_pointer, path, .. }` | `copy_to_clipboard: bool`, `notify: bool` | `--copy-to-clipboard <bool>`, `--notify <bool>` | `copy-to-clipboard=false`, `notify=false` |
+| `ScreenshotScreen { write_to_disk, show_pointer, path, .. }` | same | same | same |
+| `ScreenshotWindow { id, write_to_disk, show_pointer, path, .. }` | same | same | same |
+
+`copy_to_clipboard: false` skips setting the clipboard selection. `notify: false` skips niri's
+"Screenshot captured" desktop notification (the `org.freedesktop.Notifications.Notify` D-Bus call
+in `utils::show_screenshot_notification`, the only user-visible notification); the
+`ScreenshotCaptured` IPC event is still sent. The CLI flags follow niri's convention for
+`--write-to-disk` (explicit boolean values). For the interactive screenshot UI the choice is kept
+until it is confirmed. Old requests and existing binds behave as before.
+
+```sh
+niri msg action screenshot-screen --write-to-disk true --show-pointer false \
+    --path /run/user/1000/rice/still.png --copy-to-clipboard false --notify false
+```
+`{"Action":{"ScreenshotScreen":{"write_to_disk":true,"show_pointer":false,"path":"/run/user/1000/rice/still.png","copy_to_clipboard":false,"notify":false}}}`
+
+### Work area outline and clip
+
+```kdl
+layout {
+    work-area {
+        outline-width 1          // 0 (default): no outline
+        outline-color "#2A2A27"
+        corner-radius 12         // outline and clip
+        clip true                // default false
+    }
+}
+```
+
+Off by default; a layout option, so it merges per output and per named workspace. The working
+area is the output minus layer-shell exclusive zones **minus the struts** (floating themes inset
+the main area with `struts`).
+
+- `clip true`: strip tiles (with title strips, borders, focus rings) and the canvas plane
+  (windows, pinned windows, grid, background, regions and labels) are cropped to the working
+  area, per workspace in workspace-local coordinates, so the clip follows workspace switch
+  animations and the overview zoom. Not clipped: floating windows on strip workspaces, windows
+  moving between workspaces, the interactive-move tile, and fullscreen or maximized-to-edges
+  windows — while one of those is in view the workspace has no clip and no outline.
+- `corner-radius`: content is cropped to the rectangle (smithay `CropRenderElement`); each
+  corner square then gets a mask in the layout `background-color` outside the rounded corner
+  (border shader). With a wallpaper (background layer surface) these few corner pixels show the
+  background colour instead of the wallpaper.
+- `outline-width`/`outline-color`: drawn along the inside of the working area above the
+  content, like a border-style focus ring (4 edges + 4 corner pieces).
+
+Why no offscreen pass: an offscreen render of the workspace would allow an exact rounded clip
+over any background, but it costs a full extra pass over the workspace every frame it changes.
+Cropping adds no pass, keeps per-element damage, and the outline/masks are static elements that
+only change with the working area or the config, so a static workspace gets no extra damage.
+The grid and region-outline shaders compute their pattern from the element size, so on a
+clipped canvas they are laid out inside the clip instead of being cropped.
+
+Code: `src/layout/work_area.rs` (`WorkAreaDecor`, `WorkAreaRenderElement`),
+`src/layout/workspace/work_area_ext.rs`, `Monitor::render_workspaces` (per-element crop),
+`CanvasDecorations::update_render_elements(.., clip)`, `ScrollingSpace::working_area()`,
+config `niri-config/src/decorations.rs` (`WorkArea`, `WorkAreaPart`). Tests:
+`src/layout/tests/work_area.rs`, randomized configs (`arbitrary_work_area`,
+`Op::UpdateRenderElements`).
+
+### Struts merge per side
+
+`layout { struts { … } }` merges per side: a later `struts {}` block — in an included file, or in
+a per-output / per-workspace `layout {}` override — only overrides the sides it names. A theme
+fragment can set `struts { top 58; }` and keep the host's `left`. (Upstream replaced the whole
+block; a single `struts {}` block parses as before.) Config type: `LayoutPart.struts:
+Option<StrutsPart>` with `Option` sides; `Layout.struts: Struts` is unchanged.
+
+### Title strip pointer behaviour (verified)
+
+Verified in the nested session with a virtual pointer and keyboard (`zwlr_virtual_pointer_v1`,
+`zwp_virtual_keyboard_v1`; Mod = Alt nested):
+
+| Check | Result |
+| --- | --- |
+| press on the strip of an unfocused window | activates it |
+| strip of an unfocused tile of a stacked column | activates that tile |
+| drag in strip mode | interactive move like Mod+drag (dropped into another column) |
+| drag on a canvas at 0.62 and 0.4 | moves on the plane by exactly pointer delta / zoom |
+| double click, strip mode | toggles `maximize-column` (width 1896 ↔ 751) |
+| double click, canvas | 0.62 → 100% centred on the window; at 100% → fit |
+| right click | nothing (**fixed**: it used to activate the window) |
+| Mod+RMB on the strip | resize from the top edge wins over the strip |
+
+Fixed as well: a drag that started on the strip made the window jump up by the distance between
+the pointer and the window top (the interactive-move grab point was clamped into the window);
+tiles with a strip now keep the grab point on the strip. Tests: `src/tests/title_bar_input.rs`.
+
+### Canvas cosmetics
+
+- The tab indicator no longer sits inside the focus ring gap (see "Focus ring gap").
+- Closing windows stay on their plane position while the view pans.
+- Moving a canvas window to another workspace animates from where it was drawn.
+- The interactive-move tile animates between the zooms of the workspaces under the pointer
+  (`MoveZoom` in `src/layout/canvas.rs`, canvas-zoom animation config).
+- Window-rule border / focus-ring widths are compensated under zoom like the layout ones.
+
+### Hot path
+
+Nested session (debug build, winit inside headless sway, 1920x1080), 12 foot windows, title
+strips, borders, ring gap, line grid with background, one region, `work-area` clip on; CPU time
+of the niri process over 10 s of continuous Mod+MMB dragging (a virtual pointer moving every
+8 ms):
+
+| Scenario | niri CPU |
+| --- | --- |
+| idle | 0% |
+| strip workspace, view-offset scroll | 35–40% of one core |
+| canvas at 0.62 (all 12 windows visible), pan | 37% |
+| canvas zoom in/out animations, back to back | 35% |
+
+niri has no frame-timing output without tracy, so CPU time is the measure; canvas panning costs
+the same as strip scrolling. Strip text is rasterized only for the settled zoom (tiles see
+`canvas_tile_zoom` = the settled zoom; during a zoom animation the texture is scaled), checked by
+a test. Fixed waste: every rendered strip built its text cache key (three `String`s) per frame.
+
+### IPC changes (for the vendored niri-ipc)
+
+- `Workspace.idx`: semantics only — visual index among visible workspaces, `0` for hidden
+  workspaces (doc comment updated; no type change).
+- `Action::Screenshot`, `Action::ScreenshotScreen`, `Action::ScreenshotWindow`: appended fields
+  `copy_to_clipboard: bool` and `notify: bool`, both `#[serde(default = "default_true")]`, clap
+  `--copy-to-clipboard <bool>` / `--notify <bool>` (default true).
+- No new requests, responses or events.
+
+### Recommended config (Ash, floating theme)
+
+```kdl
+layout {
+    gaps 12
+    background-color "#111110"
+    // Host part (main config); the theme fragment may add `struts { top 58; }` and keeps `left`.
+    struts {
+        left 64
+        top 46
+    }
+    shadow { off; }
+    border {
+        width 1
+        active-color "#2A2A27"
+        inactive-color "#2A2A27"
+    }
+    focus-ring {
+        width 1
+        gap 4
+        active-color "#E0A458"
+        inactive-color "#2A2A27"
+        canvas-style "border"
+    }
+    title-bar {
+        height 28
+        font "JetBrains Mono 11"
+        padding 12
+        background-color "#1B1B19"
+        text-color "#DAD7CF"
+        muted-color "#96938B"
+        line-color "#2A2A27"
+    }
+    // Floating themes only (separate rounded boxes with a gap):
+    work-area {
+        outline-width 1
+        outline-color "#2A2A27"
+        corner-radius 12
+        clip true
+    }
+    canvas {
+        grid "lines"
+        grid-spacing 80
+        grid-color "#161615"
+        grid-line-width 1
+        background-color "#111110"
+        region-color "#2A2A27"
+        region-label-color "#96938B"
+        region-font "JetBrains Mono 16"
+    }
+}
+
+workspace "scratch" {
+    hidden
+}
+
+binds {
+    Super+1 { focus-workspace 1; }          // no more `focus-workspace 2` workaround
+    Super+Shift+1 { move-column-to-workspace 1; }
+    Mod+WheelScrollUp   cooldown-ms=150 { if-canvas { canvas-zoom-in  at-cursor=true; focus-workspace-up;   }; }
+    Mod+WheelScrollDown cooldown-ms=150 { if-canvas { canvas-zoom-out at-cursor=true; focus-workspace-down; }; }
+}
+```
+
+### Files
+
+| File | Change |
+| --- | --- |
+| `src/layout/work_area.rs` (new) | `WorkAreaDecor`, outline / corner masks / clip rect |
+| `src/layout/workspace/work_area_ext.rs` (new) | `Workspace` hooks: update, clip classification, render |
+| `src/input/layer_focus_hook.rs` (new) | `LayerFocusHook` around `do_action()` |
+| `src/tests/rice_focus.rs`, `src/tests/title_bar_input.rs`, `src/layout/tests/work_area.rs` (new) | tests |
+| `src/layout/scratch.rs` | visual index helpers, `resolve_workspace_index`, `ipc_workspace_idx` |
+| `src/layout/mod.rs` | `find_workspace_by_ref` / `move_workspace_to_idx` use visual indices; `mod work_area`; strip grab point; `MoveZoom` in `InteractiveMoveData` |
+| `src/layout/monitor.rs` | per-workspace work-area crop and outline pass; move-to-workspace animation origin under zoom |
+| `src/layout/canvas.rs`, `canvas_grid.rs`, `workspace/canvas_decor.rs` | `MoveZoom`; decorations laid out inside the clip; `WorkspaceCanvas.work_area` |
+| `src/layout/floating/canvas_mode.rs`, `closing_window.rs` | closing windows follow the pan |
+| `src/layout/scrolling.rs` | `working_area()`, tab indicator past the ring gap |
+| `src/layout/tile.rs` | rule frame widths compensated under zoom |
+| `src/layout/title_bar.rs` | allocation-free text key check |
+| `src/layout/workspace.rs` | `mod work_area_ext`, `WorkArea` render element variant, update/shader hooks |
+| `src/niri.rs` | `find_output_and_workspace_index_for`, `focus_window` clears on-demand focus, `ScreenshotDelivery` |
+| `src/input/mod.rs`, `src/input/title_bar_click.rs` | screenshot delivery, by-id index resolution, hook, strip button filter |
+| `src/ipc/{server,client}.rs`, `src/protocols/ext_workspace.rs`, `src/cli.rs` | visual `idx`, listing, ext-workspace, CLI test |
+| `niri-ipc/src/lib.rs` | screenshot fields, `idx` docs |
+| `niri-config/src/{binds,decorations,layout,lib}.rs` | screenshot bind properties, `WorkArea`, `StrutsPart`, tests, parse snapshot |
