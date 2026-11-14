@@ -403,7 +403,7 @@ There is no global Rust on the dev machine; use the flake's dev shell:
 
 ```sh
 nix develop               # or: nix print-dev-env > env.sh; source env.sh (bash)
-export CARGO_TARGET_DIR=/mnt/storage/projects/rice/.cargo-target-niri
+export CARGO_TARGET_DIR=$HOME/.cache/niri-target   # optional: keep build output out of the tree
 cargo build -j 6
 cargo test -j 6 --workspace
 RUN_SLOW_TESTS=1 cargo test -j 6 --release --lib layout::   # randomized + exhaustive layout tests
