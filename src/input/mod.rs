@@ -3691,6 +3691,17 @@ impl State {
 
         let is_mru_open = self.niri.window_mru_ui.is_open();
 
+        // ashd: Mod+scroll over a canvas zooms it continuously around the cursor.
+        let vertical = (vertical_amount != 0.0).then_some(vertical_amount);
+        if self.canvas_scroll_zoom(
+            source,
+            vertical,
+            vertical_amount_v120,
+            should_handle_in_overview,
+        ) {
+            return;
+        }
+
         // Handle wheel scroll bindings.
         if source == AxisSource::Wheel {
             // If we have a scroll bind with current modifiers, then accumulate and don't pass to

@@ -238,3 +238,119 @@ fn scroll_reaches_scaled_window() {
         "{events:?}"
     );
 }
+
+/// Presses or releases the left Super key on the seat keyboard (Mod on the headless backend).
+fn super_key(f: &mut Fixture, pressed: bool) {
+    use smithay::backend::input::{InputTime, KeyState};
+    use smithay::input::keyboard::{FilterResult, Keycode};
+
+    let state = if pressed {
+        KeyState::Pressed
+    } else {
+        KeyState::Released
+    };
+    let niri = f.niri_state();
+    let keyboard = niri.niri.seat.get_keyboard().unwrap();
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    // KEY_LEFTMETA (125) + 8.
+    keyboard.input::<(), _>(
+        niri,
+        Keycode::new(133),
+        state,
+        serial,
+        InputTime::from_millis(0),
+        |_, _, _| FilterResult::Forward,
+    );
+}
+
+/// Sends wheel notches (`v120 / 120` each, negative = up) through the virtual pointer.
+fn wheel(f: &mut Fixture, id: ClientId, v120: i32) {
+    let pointer = f.client(id).state.virtual_pointer();
+    pointer.axis_source(wl_pointer::AxisSource::Wheel);
+    pointer.axis_discrete(
+        0,
+        wl_pointer::Axis::VerticalScroll,
+        f64::from(v120) / 120. * 15.,
+        v120.signum(),
+    );
+    pointer.frame();
+    f.double_roundtrip(id);
+}
+
+fn ws_transform(f: &mut Fixture) -> crate::layout::canvas::CanvasTransform {
+    f.niri()
+        .layout
+        .active_workspace()
+        .unwrap()
+        .canvas_target_transform()
+        .unwrap()
+}
+
+#[test]
+fn mod_wheel_zooms_continuously_at_the_cursor() {
+    let (mut f, id, surface) = set_up(0.62);
+    let anchor = move_pointer(&mut f, id, Point::from((700., 400.)));
+    let before = ws_transform(&mut f);
+    let plane = before.view_to_plane(anchor);
+    f.client(id).state.take_pointer_events(&surface);
+
+    super_key(&mut f, true);
+    // One notch up: x1.2 (default wheel-zoom-factor), no step list, no cooldown.
+    wheel(&mut f, id, -120);
+    let t = ws_transform(&mut f);
+    assert!((t.zoom - 0.62 * 1.2).abs() < 1e-9, "{t:?}");
+    assert!((t.view_to_plane(anchor).x - plane.x).abs() < 1e-6);
+    assert!((t.view_to_plane(anchor).y - plane.y).abs() < 1e-6);
+
+    // Two more right away accumulate (capped at the largest zoom step, 1.0).
+    wheel(&mut f, id, -120);
+    let t = ws_transform(&mut f);
+    assert!((t.zoom - 0.62 * 1.44).abs() < 1e-9, "{t:?}");
+    wheel(&mut f, id, -120);
+    assert_eq!(ws_transform(&mut f).zoom, 1.0);
+
+    // A quarter notch down zooms by 1.2^-0.25. (The virtual pointer protocol carries whole
+    // notches only, so this sends the smooth amount without a discrete step: 15 / 4.)
+    let pointer = f.client(id).state.virtual_pointer();
+    pointer.axis_source(wl_pointer::AxisSource::Wheel);
+    pointer.axis(0, wl_pointer::Axis::VerticalScroll, 3.75);
+    pointer.frame();
+    f.double_roundtrip(id);
+    let t = ws_transform(&mut f);
+    assert!((t.zoom - 1.2f64.powf(-0.25)).abs() < 1e-9, "{t:?}");
+    let t2 = ws_transform(&mut f);
+    assert!((t2.view_to_plane(anchor).x - plane.x).abs() < 1e-6);
+
+    // Zooming out stops at the smallest step.
+    for _ in 0..10 {
+        wheel(&mut f, id, 120);
+    }
+    assert_eq!(ws_transform(&mut f).zoom, 0.5);
+
+    // The window got none of these scroll events.
+    let events = f.client(id).state.take_pointer_events(&surface);
+    assert!(
+        !events
+            .iter()
+            .any(|event| matches!(event, PointerEvent::Axis { .. })),
+        "{events:?}"
+    );
+
+    // Without Mod the scroll goes to the window and the zoom stays.
+    super_key(&mut f, false);
+    wheel(&mut f, id, -120);
+    assert_eq!(ws_transform(&mut f).zoom, 0.5);
+}
+
+#[test]
+fn mod_wheel_zoom_can_be_turned_off() {
+    let mut config = config(0.62);
+    config.layout.canvas.wheel_zoom_factor = 1.;
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, OUTPUT_SIZE);
+    let id = f.add_client();
+    move_pointer(&mut f, id, Point::from((700., 400.)));
+    super_key(&mut f, true);
+    wheel(&mut f, id, -120);
+    assert_eq!(ws_transform(&mut f).zoom, 0.62);
+}

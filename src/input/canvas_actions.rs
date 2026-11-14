@@ -7,13 +7,17 @@
 //!   goes through `do_action()`, so it does not recentre.
 
 use niri_config::Action;
+use smithay::backend::input::AxisSource;
 use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::shell::wlr_layer::Layer;
 
 use crate::input::modifiers_from_state;
-use crate::layout::canvas::CanvasPanDirection;
+use crate::layout::canvas::{
+    scroll_zoom_factor, CanvasPanDirection, CANVAS_SCROLL_PER_NOTCH,
+    CANVAS_TOUCHPAD_SCROLL_PER_NOTCH,
+};
 use crate::layout::workspace::WorkspaceId;
 use crate::niri::{Niri, State};
 use crate::window::mapped::MappedId;
@@ -176,6 +180,71 @@ impl State {
             }
             None => false,
         }
+    }
+
+    /// Mod+scroll over a canvas: zooms continuously around the cursor, proportionally to the
+    /// scroll distance (`wheel-zoom-factor` per wheel notch; high-resolution wheels and touchpads
+    /// zoom by fractions of a notch). Returns whether the scroll event was consumed.
+    ///
+    /// Only the exact Mod modifier counts (Mod+Shift+wheel etc. stay with the binds), and only
+    /// over a canvas workspace outside the overview, the recent-windows switcher and the
+    /// screenshot UI, and not over a top/overlay layer surface. Elsewhere (e.g. strip
+    /// workspaces) the event goes on to the wheel binds as before.
+    pub fn canvas_scroll_zoom(
+        &mut self,
+        source: AxisSource,
+        vertical_amount: Option<f64>,
+        vertical_amount_v120: Option<f64>,
+        in_overview: bool,
+    ) -> bool {
+        let factor = {
+            let config = self.niri.config.borrow();
+            if !config.layout.canvas.wheel_zoom_enabled() {
+                return false;
+            }
+            config.layout.canvas.wheel_zoom_factor
+        };
+        if in_overview
+            || self.niri.is_locked()
+            || self.niri.screenshot_ui.is_open()
+            || self.niri.window_mru_ui.is_open()
+            || self.niri.pointer_over_top_layer()
+        {
+            return false;
+        }
+
+        let mod_key = self.backend.mod_key(&self.niri.config.borrow());
+        let mods = self.niri.seat.get_keyboard().unwrap().modifier_state();
+        if modifiers_from_state(mods) != mod_key.to_modifiers() {
+            return false;
+        }
+
+        let notches = match source {
+            AxisSource::Wheel => match vertical_amount_v120 {
+                Some(v120) => v120 / 120.,
+                None => vertical_amount.unwrap_or(0.) / CANVAS_SCROLL_PER_NOTCH,
+            },
+            AxisSource::Finger => vertical_amount.unwrap_or(0.) / CANVAS_TOUCHPAD_SCROLL_PER_NOTCH,
+            AxisSource::Continuous => vertical_amount.unwrap_or(0.) / CANVAS_SCROLL_PER_NOTCH,
+            AxisSource::WheelTilt => return false,
+        };
+
+        let Some((output, ws_id, anchor)) = self.niri.canvas_under_cursor() else {
+            return false;
+        };
+
+        // Wheel binds must not see half-accumulated ticks from before or after.
+        self.niri.vertical_wheel_tracker.reset();
+        self.niri.horizontal_wheel_tracker.reset();
+
+        if notches != 0. {
+            let factor = scroll_zoom_factor(factor, notches);
+            self.niri
+                .layout
+                .canvas_zoom_by_at(ws_id, factor, Some(anchor));
+            self.niri.queue_redraw(&output);
+        }
+        true
     }
 
     /// Zooms by one step: with `at_cursor`, the canvas workspace under the cursor around the

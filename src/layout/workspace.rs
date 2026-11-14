@@ -166,7 +166,9 @@ niri_render_elements! {
         Scrolling = ScrollingSpaceRenderElement<R>,
         Floating = FloatingSpaceRenderElement<R>,
         // ashd: canvas windows scaled by the canvas zoom.
-        Canvas = RescaleRenderElement<FloatingSpaceRenderElement<R>>,
+        Canvas = crate::render_helpers::minify::MinifyRenderElement<
+            RescaleRenderElement<FloatingSpaceRenderElement<R>>,
+        >,
         // ashd: canvas plane grid and regions.
         CanvasDecor = CanvasDecorRenderElement,
         // ashd: working area outline and corner masks.

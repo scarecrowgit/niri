@@ -22,13 +22,14 @@ use super::{FloatingActive, Workspace, WorkspaceAddWindowTarget, WorkspaceRender
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::canvas::{
     bounding_box, compensated_frame_width, fit_transform, next_zoom_step, push_to_contain,
-    rect_center, CanvasMemory, CanvasPanDirection, CanvasPanGesture, CanvasTransform, CanvasView,
-    CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN, CANVAS_FIT_PADDING,
+    rect_center, zoom_by_target, CanvasMemory, CanvasPanDirection, CanvasPanGesture,
+    CanvasTransform, CanvasView, CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN, CANVAS_FIT_PADDING,
     CANVAS_TOUCHPAD_GESTURE_MOVEMENT,
 };
 use crate::layout::scrolling::{Column, ColumnWidth, StripArrangement};
 use crate::layout::tile::Tile;
 use crate::layout::{HitType, LayoutElement, Options, RemovedTile, RenderLayer};
+use crate::render_helpers::minify::MinifyRenderElement;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
@@ -493,6 +494,38 @@ impl<W: LayoutElement> Workspace<W> {
         self.canvas_animate_to(target.zoomed_around(anchor, zoom), anchor);
     }
 
+    /// Zooms by `factor` relative to the target zoom (clamped to the `zoom-steps` range), with
+    /// the plane point currently under `anchor` (view coordinates; default: working area centre)
+    /// staying under it. Uses the `canvas-wheel-zoom` animation; consecutive calls accumulate.
+    pub fn canvas_zoom_by(&mut self, factor: f64, anchor: Option<Point<f64, Logical>>) {
+        let (Some(current), Some(target)) =
+            (self.canvas_transform(), self.canvas_target_transform())
+        else {
+            return;
+        };
+        if self.canvas.zoom_gesture.is_some() {
+            return;
+        }
+        let anchor = anchor.unwrap_or_else(|| rect_center(self.working_area));
+        if !anchor.x.is_finite() || !anchor.y.is_finite() {
+            return;
+        }
+        let canvas = &self.options.layout.canvas;
+        let new = zoom_by_target(
+            current,
+            target,
+            anchor,
+            factor,
+            canvas.min_zoom(),
+            canvas.max_zoom(),
+        );
+        if new.approx_eq(&target) {
+            return;
+        }
+        let zoom_config = self.options.animations.canvas_wheel_zoom.0;
+        self.canvas_animate_to_with(new, anchor, zoom_config);
+    }
+
     /// Picks offset and zoom so that all (non-pinned) windows are visible.
     pub fn canvas_fit(&mut self) {
         if !self.is_canvas() {
@@ -572,16 +605,25 @@ impl<W: LayoutElement> Workspace<W> {
     }
 
     fn canvas_animate_to(&mut self, target: CanvasTransform, focus: Point<f64, Logical>) {
+        let zoom_config = self.options.animations.canvas_zoom.0;
+        self.canvas_animate_to_with(target, focus, zoom_config);
+    }
+
+    fn canvas_animate_to_with(
+        &mut self,
+        target: CanvasTransform,
+        focus: Point<f64, Logical>,
+        zoom_config: niri_config::Animation,
+    ) {
         if !self.is_canvas() || !target.is_finite() {
             return;
         }
         let zoom = self.options.layout.canvas.clamp_zoom(target.zoom);
         let target = CanvasTransform::new(target.offset, zoom);
         let pan = self.options.animations.canvas_pan.0;
-        let zoom = self.options.animations.canvas_zoom.0;
         self.canvas
             .view
-            .animate_to(&self.clock, target, focus, pan, zoom);
+            .animate_to(&self.clock, target, focus, pan, zoom_config);
         self.sync_canvas();
     }
 
@@ -844,9 +886,12 @@ impl<W: LayoutElement> Workspace<W> {
                     push(elem.into())
                 });
         } else {
+            // Zoomed out, window contents are supersampled instead of skipping texels.
+            let minify = zoom < 1. && self.options.layout.canvas.smooth_zoom_out;
             self.floating
                 .render(ctx, xray_pos, view_rect, focus_ring, layer, &mut |elem| {
                     let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
+                    let elem = MinifyRenderElement::new(elem, minify);
                     push(WorkspaceRenderElement::Canvas(elem))
                 });
         }

@@ -144,7 +144,7 @@ impl CanvasTransform {
         self.offset.x.is_finite() && self.offset.y.is_finite() && self.zoom.is_finite()
     }
 
-    fn approx_eq(&self, other: &Self) -> bool {
+    pub fn approx_eq(&self, other: &Self) -> bool {
         (self.zoom - other.zoom).abs() < ZOOM_EPSILON
             && (self.offset.x - other.offset.x).abs() < 1e-6
             && (self.offset.y - other.offset.y).abs() < 1e-6
@@ -249,10 +249,27 @@ impl CanvasView {
             (from_plane.x - to_plane.x).abs() > 1e-6 || (from_plane.y - to_plane.y).abs() > 1e-6;
         let zoom_changes = (current.zoom - target.zoom).abs() > ZOOM_EPSILON;
 
+        // A zoom animation that is retargeted (wheel notches, key repeat) keeps its velocity, so
+        // that consecutive steps accumulate into one motion instead of restarting from rest.
+        let zoom_velocity = carried_zoom_velocity(
+            self.zoom_velocity(clock),
+            current.zoom,
+            target.zoom,
+            &zoom_config,
+        );
         let pan = (pan_moves && !pan_config.off)
             .then(|| Animation::new(clock.clone(), 0., 1., pan_velocity, pan_config));
-        let zoom = (zoom_changes && !zoom_config.off)
-            .then(|| Animation::new(clock.clone(), current.zoom, target.zoom, 0., zoom_config));
+        let zoom = (zoom_changes && !zoom_config.off).then(|| {
+            // Animation::new() expects real-time velocity; ours is in (slowed-down) clock time.
+            let velocity = zoom_velocity * clock.rate();
+            Animation::new(
+                clock.clone(),
+                current.zoom,
+                target.zoom,
+                velocity,
+                zoom_config,
+            )
+        });
 
         if pan.is_none() && zoom.is_none() {
             self.jump_to(target);
@@ -269,6 +286,25 @@ impl CanvasView {
         });
         // Keep current consistent with a possibly partial animation (e.g. pan off, zoom on).
         self.advance();
+    }
+
+    /// Current speed of the zoom animation in zoom units per second of clock time (0 when the
+    /// zoom is not animating).
+    pub fn zoom_velocity(&self, clock: &Clock) -> f64 {
+        let Some(anim) = self.anim.as_ref().and_then(|anim| anim.zoom.as_ref()) else {
+            return 0.;
+        };
+        if anim.is_done() {
+            return 0.;
+        }
+        const DT: Duration = Duration::from_millis(1);
+        let now = clock.now();
+        let v = (anim.value_at(now + DT) - anim.value_at(now)) / DT.as_secs_f64();
+        if v.is_finite() {
+            v
+        } else {
+            0.
+        }
     }
 
     /// Continues a released pan gesture: glides by `plane_delta` starting at `plane_speed`
@@ -334,12 +370,42 @@ impl CanvasView {
     }
 }
 
+/// Initial velocity for a zoom animation from `from` to `to` that replaces one moving at
+/// `velocity` (zoom units per second).
+///
+/// The velocity is kept only when it points towards the new target, and capped so that a spring
+/// with a damping ratio of at least 1 does not overshoot the target (which is clamped to the zoom
+/// limits, so the zoom never leaves them). Reversing the direction starts from rest.
+pub fn carried_zoom_velocity(
+    velocity: f64,
+    from: f64,
+    to: f64,
+    config: &niri_config::Animation,
+) -> f64 {
+    let delta = to - from;
+    if !velocity.is_finite() || delta.abs() < ZOOM_EPSILON || velocity * delta <= 0. {
+        return 0.;
+    }
+    let niri_config::animations::Kind::Spring(params) = config.kind else {
+        // Easing curves ignore the initial velocity.
+        return 0.;
+    };
+    // A critically damped spring x(t) = (x0 + (v0 + w x0) t) e^(-w t) does not cross the target
+    // as long as |v0| <= w |x0|; overdamped springs have an even larger bound.
+    let omega = f64::from(params.stiffness).sqrt();
+    let max = omega * delta.abs();
+    velocity.clamp(-max, max)
+}
+
+/// Zoom steps closer than this ratio to the current zoom are skipped when stepping, so that a
+/// zoom just next to a step (e.g. after zooming with the wheel) does not produce a tiny step.
+const MIN_ZOOM_STEP_RATIO: f64 = 1.04;
+
 /// Zoom step to go to from `current` when zooming in or out through `steps` (sorted ascending).
 ///
-/// Values not exactly on a step go to the nearest step in the requested direction; at the end of
-/// the range the boundary step is returned.
+/// Values not exactly on a step go to the next step in the requested direction that is at least
+/// 4% away; at the end of the range the boundary step is returned.
 pub fn next_zoom_step(steps: &[f64], current: f64, zoom_in: bool) -> f64 {
-    const EPS: f64 = 1e-3;
     let (Some(&min), Some(&max)) = (steps.first(), steps.last()) else {
         return current;
     };
@@ -347,16 +413,58 @@ pub fn next_zoom_step(steps: &[f64], current: f64, zoom_in: bool) -> f64 {
         steps
             .iter()
             .copied()
-            .find(|step| *step > current + EPS)
+            .find(|step| *step > current * MIN_ZOOM_STEP_RATIO)
             .unwrap_or(max)
     } else {
         steps
             .iter()
             .rev()
             .copied()
-            .find(|step| *step < current - EPS)
+            .find(|step| *step * MIN_ZOOM_STEP_RATIO < current)
             .unwrap_or(min)
     }
+}
+
+/// Mouse wheel scroll distance (libinput "pixels", or `v120 / 120 * 15`) of one notch.
+pub const CANVAS_SCROLL_PER_NOTCH: f64 = 15.;
+/// Touchpad (finger) scroll distance that counts as one wheel notch for Mod+scroll zoom.
+pub const CANVAS_TOUCHPAD_SCROLL_PER_NOTCH: f64 = 50.;
+/// Most notches that a single scroll event may zoom by (protects against bogus deltas).
+const MAX_NOTCHES_PER_EVENT: f64 = 10.;
+
+/// Zoom factor for scrolling by `notches` wheel notches (positive = scroll down = zoom out) with
+/// `factor_per_notch`. Fractional notches (high-resolution wheels, touchpads) zoom
+/// proportionally: two half notches zoom as much as one full notch.
+pub fn scroll_zoom_factor(factor_per_notch: f64, notches: f64) -> f64 {
+    if !notches.is_finite() || !factor_per_notch.is_finite() || factor_per_notch <= 0. {
+        return 1.;
+    }
+    let notches = notches.clamp(-MAX_NOTCHES_PER_EVENT, MAX_NOTCHES_PER_EVENT);
+    factor_per_notch.powf(-notches)
+}
+
+/// Target of zooming by `factor` around `anchor` (view coordinates).
+///
+/// The factor multiplies the *target* zoom, so that consecutive steps accumulate while the view
+/// is still animating; the result is clamped to `[min_zoom, max_zoom]`. The plane point that is
+/// *currently* drawn under `anchor` stays under it for the whole animation (what the pointer
+/// points at is what the view zooms into).
+pub fn zoom_by_target(
+    current: CanvasTransform,
+    target: CanvasTransform,
+    anchor: Point<f64, Logical>,
+    factor: f64,
+    min_zoom: f64,
+    max_zoom: f64,
+) -> CanvasTransform {
+    if !factor.is_finite() || factor <= 0. {
+        return target;
+    }
+    let zoom = (target.zoom * factor).clamp(min_zoom, f64::max(min_zoom, max_zoom));
+    if (zoom - target.zoom).abs() < ZOOM_EPSILON && current.approx_eq(&target) {
+        return target;
+    }
+    CanvasTransform::centered_on(current.view_to_plane(anchor), anchor, zoom)
 }
 
 /// Transform that shows `bbox` (plane) centred in `area` (view) with `padding`, zoom clamped to
@@ -685,6 +793,19 @@ impl<W: LayoutElement> Layout<W> {
         }
     }
 
+    /// Zooms a canvas workspace by `factor` (relative to its target zoom, clamped) around
+    /// `anchor` (its view coordinates), with the wheel zoom animation. Used by Mod+scroll.
+    pub fn canvas_zoom_by_at(
+        &mut self,
+        ws_id: WorkspaceId,
+        factor: f64,
+        anchor: Option<Point<f64, Logical>>,
+    ) {
+        if let Some(ws) = self.workspaces_mut().find(|ws| ws.id() == ws_id) {
+            ws.canvas_zoom_by(factor, anchor);
+        }
+    }
+
     /// Starts panning a canvas workspace by direct manipulation. Cancels other canvas pan
     /// gestures.
     pub fn canvas_pan_gesture_begin(&mut self, ws_id: WorkspaceId, is_touchpad: bool) -> bool {
@@ -992,6 +1113,200 @@ mod tests {
         assert_eq!(next_zoom_step(&steps, 0.55, false), 0.5);
         assert_eq!(next_zoom_step(&steps, 0.1, true), 0.4);
         assert_eq!(next_zoom_step(&steps, 3.0, false), 1.0);
+    }
+
+    fn spring(stiffness: u32) -> niri_config::Animation {
+        niri_config::Animation {
+            off: false,
+            kind: niri_config::animations::Kind::Spring(niri_config::animations::SpringParams {
+                damping_ratio: 1.,
+                stiffness,
+                epsilon: 0.0001,
+            }),
+        }
+    }
+
+    /// Applies one wheel step the way `Workspace::canvas_zoom_by` does.
+    fn wheel(view: &mut CanvasView, clock: &Clock, anchor: Point<f64, Logical>, notches: f64) {
+        let factor = scroll_zoom_factor(1.2, notches);
+        let target = zoom_by_target(view.current(), view.target(), anchor, factor, 0.25, 1.0);
+        view.animate_to(clock, target, anchor, spring(500), spring(1200));
+    }
+
+    #[test]
+    fn scroll_zoom_factor_is_proportional() {
+        // Scrolling up (negative) zooms in.
+        assert_abs_diff_eq!(scroll_zoom_factor(1.2, -1.), 1.2);
+        assert_abs_diff_eq!(scroll_zoom_factor(1.2, 1.), 1. / 1.2);
+        assert_abs_diff_eq!(scroll_zoom_factor(1.2, 0.), 1.);
+        // High-resolution wheels: fractions of a notch compose to the full notch.
+        let half = scroll_zoom_factor(1.2, 0.5);
+        assert_abs_diff_eq!(half * half, scroll_zoom_factor(1.2, 1.), epsilon = 1e-12);
+        let eighth = scroll_zoom_factor(1.25, -15. / 120.);
+        assert_abs_diff_eq!(eighth.powi(8), 1.25, epsilon = 1e-12);
+        // Bogus input does nothing; huge deltas are capped.
+        assert_eq!(scroll_zoom_factor(1.2, f64::NAN), 1.);
+        assert_eq!(scroll_zoom_factor(f64::NAN, 1.), 1.);
+        assert_abs_diff_eq!(scroll_zoom_factor(1.2, 1e9), 1.2f64.powf(-10.));
+    }
+
+    #[test]
+    fn zoom_by_accumulates_on_the_target() {
+        let start = CanvasTransform::new(pt(-100., 50.), 0.5);
+        let anchor = pt(700., 300.);
+        // Mid-animation: current is still at the start, target already zoomed in once.
+        let target = start.zoomed_around(anchor, 0.6);
+        let next = zoom_by_target(start, target, anchor, 1.2, 0.25, 1.0);
+        assert_abs_diff_eq!(next.zoom, 0.72, epsilon = 1e-12);
+        // The plane point currently under the anchor stays under it.
+        assert_pt_eq(next.view_to_plane(anchor), start.view_to_plane(anchor));
+    }
+
+    #[test]
+    fn zoom_by_clamps() {
+        let t = CanvasTransform::new(pt(0., 0.), 0.9);
+        let anchor = pt(10., 20.);
+        let z = zoom_by_target(t, t, anchor, 1.5, 0.25, 1.0);
+        assert_abs_diff_eq!(z.zoom, 1.0);
+        assert_pt_eq(z.view_to_plane(anchor), t.view_to_plane(anchor));
+        let z = zoom_by_target(t, t, anchor, 0.01, 0.25, 1.0);
+        assert_abs_diff_eq!(z.zoom, 0.25);
+        // At the limit and settled: nothing to do.
+        let max = CanvasTransform::new(pt(3., 4.), 1.0);
+        assert_eq!(zoom_by_target(max, max, anchor, 1.2, 0.25, 1.0), max);
+        // Invalid factors keep the target.
+        assert_eq!(zoom_by_target(t, t, anchor, 0., 0.25, 1.0), t);
+        assert_eq!(zoom_by_target(t, t, anchor, f64::NAN, 0.25, 1.0), t);
+    }
+
+    #[test]
+    fn wheel_notches_accumulate_smoothly() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let mut view = CanvasView::new(CanvasTransform::new(pt(-300., -200.), 0.4));
+        let anchor = pt(1234., 567.);
+        let plane = view.current().view_to_plane(anchor);
+
+        // Five notches up, 30 ms apart (faster than the animation settles).
+        let mut last_zoom = view.current().zoom;
+        let mut last_speed = 0.;
+        let mut ms = 0;
+        for notch in 0..5 {
+            wheel(&mut view, &clock, anchor, -1.);
+            let expected = (0.4 * 1.2f64.powi(notch + 1)).min(1.0);
+            assert_abs_diff_eq!(view.target().zoom, expected, epsilon = 1e-9);
+            for _ in 0..6 {
+                ms += 5;
+                clock.set_unadjusted(Duration::from_millis(ms));
+                view.advance();
+                let current = view.current();
+                // Monotonic, never past the target or the limits, anchor fixed.
+                assert!(current.zoom >= last_zoom - 1e-12);
+                assert!(current.zoom <= view.target().zoom + 1e-9);
+                assert_pt_eq(current.view_to_plane(anchor), plane);
+                last_zoom = current.zoom;
+            }
+            // The retargeted animation keeps moving: it does not restart from rest.
+            let speed = view.zoom_velocity(&clock);
+            if notch > 0 {
+                assert!(
+                    speed > 0.5 * last_speed,
+                    "notch {notch}: {speed} vs {last_speed}"
+                );
+            }
+            last_speed = speed;
+        }
+
+        // Settles exactly on the accumulated target.
+        clock.set_unadjusted(Duration::from_secs(10));
+        view.advance();
+        assert!(!view.is_animating());
+        assert_abs_diff_eq!(view.current().zoom, 0.4 * 1.2f64.powi(5), epsilon = 1e-9);
+        assert_pt_eq(view.current().view_to_plane(anchor), plane);
+    }
+
+    #[test]
+    fn wheel_zoom_stops_at_the_limit_without_overshoot() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let mut view = CanvasView::new(CanvasTransform::new(pt(0., 0.), 0.8));
+        let anchor = pt(400., 400.);
+        let mut ms = 0;
+        // Many fast notches towards the maximum.
+        for _ in 0..10 {
+            wheel(&mut view, &clock, anchor, -1.);
+            for _ in 0..3 {
+                ms += 4;
+                clock.set_unadjusted(Duration::from_millis(ms));
+                view.advance();
+                assert!(view.current().zoom <= 1.0 + 1e-9, "{}", view.current().zoom);
+            }
+        }
+        assert_abs_diff_eq!(view.target().zoom, 1.0);
+        for step in 1..200 {
+            clock.set_unadjusted(Duration::from_millis(ms + step * 5));
+            view.advance();
+            assert!(view.current().zoom <= 1.0 + 1e-9, "{}", view.current().zoom);
+        }
+        assert_abs_diff_eq!(view.current().zoom, 1.0);
+    }
+
+    #[test]
+    fn reversing_the_wheel_starts_from_rest() {
+        let mut clock = Clock::with_time(Duration::ZERO);
+        let mut view = CanvasView::new(CanvasTransform::new(pt(0., 0.), 0.5));
+        let anchor = pt(100., 100.);
+        wheel(&mut view, &clock, anchor, -2.);
+        clock.set_unadjusted(Duration::from_millis(20));
+        view.advance();
+        assert!(view.zoom_velocity(&clock) > 0.);
+        let zoom_then = view.current().zoom;
+        // Back out: the zoom must not keep growing past where it is.
+        wheel(&mut view, &clock, anchor, 4.);
+        for ms in [21, 25, 30, 40, 60] {
+            clock.set_unadjusted(Duration::from_millis(ms));
+            view.advance();
+            assert!(view.current().zoom <= zoom_then + 1e-9);
+        }
+    }
+
+    #[test]
+    fn carried_velocity_rules() {
+        let spring = spring(1200);
+        // Towards the target: kept, but capped at omega * distance.
+        assert_abs_diff_eq!(carried_zoom_velocity(0.5, 0.5, 0.7, &spring), 0.5);
+        let omega = 1200f64.sqrt();
+        let capped = carried_zoom_velocity(50., 0.5, 0.7, &spring);
+        assert_abs_diff_eq!(capped, omega * 0.2, epsilon = 1e-9);
+        let capped = carried_zoom_velocity(-50., 0.7, 0.5, &spring);
+        assert_abs_diff_eq!(capped, -omega * 0.2, epsilon = 1e-9);
+        // Away from the target, or no motion: from rest.
+        assert_eq!(carried_zoom_velocity(-0.5, 0.5, 0.7, &spring), 0.);
+        assert_eq!(carried_zoom_velocity(0.5, 0.5, 0.5, &spring), 0.);
+        assert_eq!(carried_zoom_velocity(f64::NAN, 0.5, 0.7, &spring), 0.);
+        // Easing curves ignore it.
+        let easing = niri_config::Animation {
+            off: false,
+            kind: niri_config::animations::Kind::Easing(niri_config::animations::EasingParams {
+                duration_ms: 200,
+                curve: niri_config::animations::Curve::Linear,
+            }),
+        };
+        assert_eq!(carried_zoom_velocity(0.5, 0.5, 0.7, &easing), 0.);
+    }
+
+    #[test]
+    fn key_repeat_steps_accumulate() {
+        // canvas-zoom-in steps from the target zoom, so a held key walks through the steps.
+        let steps = [0.4, 0.55, 0.75, 1.0];
+        let mut zoom = 0.4;
+        let mut seen = vec![];
+        for _ in 0..5 {
+            zoom = next_zoom_step(&steps, zoom, true);
+            seen.push(zoom);
+        }
+        assert_eq!(seen, vec![0.55, 0.75, 1.0, 1.0, 1.0]);
+        // Just next to a step (after a wheel zoom), the tiny step is skipped.
+        assert_eq!(next_zoom_step(&steps, 0.74, true), 1.0);
+        assert_eq!(next_zoom_step(&steps, 0.76, false), 0.55);
     }
 
     #[test]

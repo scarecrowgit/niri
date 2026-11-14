@@ -238,7 +238,10 @@ impl RenderElement<GlesRenderer> for ClippedSurfaceRenderElement<GlesRenderer> {
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        frame.override_default_tex_program(self.program.clone(), self.compute_uniforms());
+        // ashd: minifying variant on zoomed-out canvases.
+        let (program, uniforms) =
+            super::minify::clipped_program(frame, &self.program, self.compute_uniforms(), src, dst);
+        frame.override_default_tex_program(program, uniforms);
         RenderElement::<GlesRenderer>::draw(
             &self.inner,
             frame,
@@ -271,9 +274,16 @@ impl<'render> RenderElement<TtyRenderer<'render>>
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        frame
-            .as_gles_frame()
-            .override_default_tex_program(self.program.clone(), self.compute_uniforms());
+        // ashd: minifying variant on zoomed-out canvases.
+        let gles_frame = frame.as_gles_frame();
+        let (program, uniforms) = super::minify::clipped_program(
+            gles_frame,
+            &self.program,
+            self.compute_uniforms(),
+            src,
+            dst,
+        );
+        gles_frame.override_default_tex_program(program, uniforms);
         RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache)?;
         frame.as_gles_frame().clear_tex_program_override();
         Ok(())

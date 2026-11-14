@@ -2015,6 +2015,8 @@ mod tests {
                         1.0,
                     ],
                     pan_step: 120.0,
+                    wheel_zoom_factor: 1.2,
+                    smooth_zoom_out: true,
                     decor: CanvasDecor {
                         grid: Off,
                         grid_spacing: 80.0,
@@ -2267,6 +2269,18 @@ mod tests {
                             SpringParams {
                                 damping_ratio: 1.0,
                                 stiffness: 600,
+                                epsilon: 0.0001,
+                            },
+                        ),
+                    },
+                ),
+                canvas_wheel_zoom: CanvasWheelZoomAnim(
+                    Animation {
+                        off: false,
+                        kind: Spring(
+                            SpringParams {
+                                damping_ratio: 1.0,
+                                stiffness: 1200,
                                 epsilon: 0.0001,
                             },
                         ),

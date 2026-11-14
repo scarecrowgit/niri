@@ -12,6 +12,11 @@
 //!         zoom-steps 0.4 0.5 0.62 0.75 0.9 1.0
 //!         // Distance in logical view pixels that one canvas-pan-* action moves the view.
 //!         pan-step 120
+//!         // Zoom factor per mouse wheel notch of Mod+scroll over a canvas (1 turns the native
+//!         // Mod+scroll zoom off, the scroll then goes to the wheel binds).
+//!         wheel-zoom-factor 1.2
+//!         // Supersample window contents when the canvas is zoomed out (false: plain bilinear).
+//!         smooth-zoom-out true
 //!     }
 //! }
 //!
@@ -23,6 +28,10 @@
 //!     // Zoom animation of the canvas view.
 //!     canvas-zoom {
 //!         spring damping-ratio=1.0 stiffness=600 epsilon=0.0001
+//!     }
+//!     // Zoom animation of Mod+scroll (consecutive notches retarget it and keep its velocity).
+//!     canvas-wheel-zoom {
+//!         spring damping-ratio=1.0 stiffness=1200 epsilon=0.0001
 //!     }
 //! }
 //! ```
@@ -41,6 +50,8 @@ use crate::FloatOrInt;
 pub const CANVAS_MIN_ZOOM: f64 = 0.05;
 /// Largest zoom accepted anywhere in canvas mode.
 pub const CANVAS_MAX_ZOOM: f64 = 4.;
+/// Largest accepted `wheel-zoom-factor`.
+pub const CANVAS_MAX_WHEEL_ZOOM_FACTOR: f64 = 4.;
 
 /// Final canvas config.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +64,10 @@ pub struct Canvas {
     pub zoom_steps: Vec<f64>,
     /// Pan distance of one pan action, in logical view pixels (divided by zoom on the plane).
     pub pan_step: f64,
+    /// Zoom factor per wheel notch of the native Mod+scroll zoom; 1 turns it off.
+    pub wheel_zoom_factor: f64,
+    /// Supersample (box-filter) window contents drawn minified by the canvas zoom.
+    pub smooth_zoom_out: bool,
     /// ashd: plane grid and named regions, see `crate::decorations`.
     pub decor: crate::decorations::CanvasDecor,
 }
@@ -63,6 +78,8 @@ impl Default for Canvas {
             default_zoom: 0.62,
             zoom_steps: vec![0.4, 0.5, 0.62, 0.75, 0.9, 1.0],
             pan_step: 120.,
+            wheel_zoom_factor: 1.2,
+            smooth_zoom_out: true,
             decor: Default::default(), // ashd
         }
     }
@@ -107,6 +124,18 @@ impl Canvas {
         if !self.pan_step.is_finite() || self.pan_step < 1. {
             self.pan_step = Canvas::default().pan_step;
         }
+
+        if !self.wheel_zoom_factor.is_finite() {
+            self.wheel_zoom_factor = Canvas::default().wheel_zoom_factor;
+        }
+        self.wheel_zoom_factor = self
+            .wheel_zoom_factor
+            .clamp(1., CANVAS_MAX_WHEEL_ZOOM_FACTOR);
+    }
+
+    /// Whether Mod+scroll over a canvas zooms natively (instead of going to the wheel binds).
+    pub fn wheel_zoom_enabled(&self) -> bool {
+        self.wheel_zoom_factor > 1. + 1e-6
     }
 }
 
@@ -119,6 +148,10 @@ pub struct CanvasPart {
     pub zoom_steps: Option<Vec<FloatOrInt<0, 4>>>,
     #[knuffel(child, unwrap(argument))]
     pub pan_step: Option<FloatOrInt<1, 65535>>,
+    #[knuffel(child, unwrap(argument))]
+    pub wheel_zoom_factor: Option<FloatOrInt<1, 4>>,
+    #[knuffel(child, unwrap(argument))]
+    pub smooth_zoom_out: Option<bool>,
     /// ashd: plane grid and named regions, see `crate::decorations`.
     #[knuffel(flatten(child))]
     pub decor: crate::decorations::CanvasDecorPart,
@@ -134,6 +167,12 @@ impl MergeWith<CanvasPart> for Canvas {
         }
         if let Some(x) = part.pan_step {
             self.pan_step = x.0;
+        }
+        if let Some(x) = part.wheel_zoom_factor {
+            self.wheel_zoom_factor = x.0;
+        }
+        if let Some(x) = part.smooth_zoom_out {
+            self.smooth_zoom_out = x;
         }
         self.decor.merge_with(&part.decor); // ashd
         self.normalize();
@@ -171,6 +210,38 @@ impl Default for CanvasZoomAnim {
                 epsilon: 0.0001,
             }),
         })
+    }
+}
+
+/// Animation of the native Mod+scroll zoom.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasWheelZoomAnim(pub Animation);
+
+impl Default for CanvasWheelZoomAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Spring(SpringParams {
+                damping_ratio: 1.,
+                stiffness: 1200,
+                epsilon: 0.0001,
+            }),
+        })
+    }
+}
+
+impl<S> knuffel::Decode<S> for CanvasWheelZoomAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
     }
 }
 
@@ -217,6 +288,52 @@ mod tests {
         assert_eq!(config.layout.canvas, Canvas::default());
         assert_eq!(config.animations.canvas_pan, CanvasPanAnim::default());
         assert_eq!(config.animations.canvas_zoom, CanvasZoomAnim::default());
+        assert_eq!(
+            config.animations.canvas_wheel_zoom,
+            CanvasWheelZoomAnim::default()
+        );
+        assert_eq!(config.layout.canvas.wheel_zoom_factor, 1.2);
+        assert!(config.layout.canvas.smooth_zoom_out);
+    }
+
+    #[test]
+    fn parse_wheel_zoom_and_filter() {
+        let config = Config::parse_mem(
+            r#"
+            layout {
+                canvas {
+                    wheel-zoom-factor 1.25
+                    smooth-zoom-out false
+                }
+            }
+            animations {
+                canvas-wheel-zoom {
+                    spring damping-ratio=1.0 stiffness=2000 epsilon=0.0001
+                }
+            }
+            "#,
+        )
+        .unwrap();
+        assert_eq!(config.layout.canvas.wheel_zoom_factor, 1.25);
+        assert!(config.layout.canvas.wheel_zoom_enabled());
+        assert!(!config.layout.canvas.smooth_zoom_out);
+        assert_eq!(
+            config.animations.canvas_wheel_zoom.0,
+            Animation {
+                off: false,
+                kind: Kind::Spring(SpringParams {
+                    damping_ratio: 1.,
+                    stiffness: 2000,
+                    epsilon: 0.0001,
+                }),
+            }
+        );
+
+        // 1 turns the native wheel zoom off; out-of-range values are rejected.
+        let config = Config::parse_mem("layout { canvas { wheel-zoom-factor 1; }; }").unwrap();
+        assert!(!config.layout.canvas.wheel_zoom_enabled());
+        assert!(Config::parse_mem("layout { canvas { wheel-zoom-factor 0.5; }; }").is_err());
+        assert!(Config::parse_mem("layout { canvas { wheel-zoom-factor 5; }; }").is_err());
     }
 
     #[test]

@@ -74,6 +74,8 @@ layout {
         default-zoom 0.62
         zoom-steps 0.4 0.5 0.62 0.75 0.9 1.0
         pan-step 120
+        wheel-zoom-factor 1.2   // Mod+scroll zoom per wheel notch, 1..4; 1 = off (binds get it)
+        smooth-zoom-out true    // supersample window contents below 80% (false: bilinear)
     }
 }
 
@@ -84,8 +86,13 @@ animations {
     canvas-zoom {
         spring damping-ratio=1.0 stiffness=600 epsilon=0.0001
     }
+    canvas-wheel-zoom {         // Mod+scroll zoom
+        spring damping-ratio=1.0 stiffness=1200 epsilon=0.0001
+    }
 }
 ```
+
+See "Zoom feel and zoom-out quality" at the end for the last three.
 
 `default-workspace-mode` and `canvas {}` are regular `layout` options, so they merge per output
 (`output { layout { ... } }`) and per named workspace (`workspace "x" { layout { ... } }`) like
@@ -510,11 +517,13 @@ Real pointer input to windows at any canvas zoom, mouse/touchpad pan and zoom.
   tablet's map-to-focused-window) use the active canvas window's rectangle at the *target* view,
   so after a keyboard reveal the pointer lands where the window ends up.
 
-Recommended binds (not in the default config; wheel binds are user config):
+Mod+scroll over a canvas zooms natively (continuous, see "Zoom feel and zoom-out quality");
+the wheel binds below only fire where that does not apply (strip workspaces, the bar, the
+overview). Recommended binds (not in the default config; wheel binds are user config):
 
 ```kdl
 binds {
-    // Mod+wheel: zoom at the cursor on canvas workspaces, switch workspaces on strip ones.
+    // Mod+wheel: switch workspaces on strip ones (the canvas branch is a fallback).
     Mod+WheelScrollUp   cooldown-ms=150 { if-canvas { canvas-zoom-in  at-cursor=true; focus-workspace-up;   }; }
     Mod+WheelScrollDown cooldown-ms=150 { if-canvas { canvas-zoom-out at-cursor=true; focus-workspace-down; }; }
 }
@@ -1042,3 +1051,92 @@ binds {
 | `src/ipc/{server,client}.rs`, `src/protocols/ext_workspace.rs`, `src/cli.rs` | visual `idx`, listing, ext-workspace, CLI test |
 | `niri-ipc/src/lib.rs` | screenshot fields, `idx` docs |
 | `niri-config/src/{binds,decorations,layout,lib}.rs` | screenshot bind properties, `WorkArea`, `StrutsPart`, tests, parse snapshot |
+
+## Zoom feel and zoom-out quality
+
+### Continuous Mod+scroll zoom
+
+Mod+scroll over a canvas workspace is handled natively in `on_pointer_axis` (before the wheel
+binds): the zoom changes by `wheel-zoom-factor` (default 1.2) per wheel notch, proportionally
+to the scroll distance, with no cooldown and no step list:
+
+- wheel: `v120 / 120` notches, so high-resolution wheels zoom by fractions of a notch (without
+  `v120`, the scroll amount / 15); touchpad two-finger scroll: 50 scroll units per notch;
+  continuous sources (e.g. on-button scrolling): amount / 15. Scrolling up zooms in.
+- the factor multiplies the *target* zoom, so notches that arrive while the view is still
+  animating accumulate; the result is clamped to the `zoom-steps` range (the zoom limits);
+- the plane point *currently* drawn under the cursor stays under it for the whole animation;
+- the `canvas-wheel-zoom` animation (default spring 1.0 / 1200 / 0.0001, about twice as stiff
+  as `canvas-zoom`) is retargeted on every notch and keeps its velocity (see below).
+
+It applies only with exactly the Mod modifier (Mod+Shift+wheel etc. stay with the binds), only
+over a canvas workspace, and not in the overview, the recent-windows switcher, the screenshot
+UI, on the lock screen or over a top/overlay layer surface. Everywhere else (strip workspaces in
+particular) the event goes to the wheel binds as before. `wheel-zoom-factor 1` turns it off.
+
+**Velocity carry-over** (all canvas zoom animations): when a zoom animation is retargeted
+(wheel notches, a held `canvas-zoom-in` key, a fit during a zoom), the new spring starts with
+the old one's current velocity if it points towards the new target, capped at
+`sqrt(stiffness) × |distance|` so that a spring with damping ratio ≥ 1 never overshoots the
+target (and therefore never the zoom limits). Reversing the direction starts from rest.
+
+**Keyboard steps**: `canvas-zoom-in/out` step from the target zoom (so a held key accumulates)
+and now skip steps closer than 4% to the current zoom (after a wheel zoom to 0.74 the next step
+up is not 0.75). The ashd config uses fewer, larger steps (`0.4 0.55 0.75 1.0`).
+
+### Zoom-out quality: supersampled minification
+
+Cause of the "low resolution" look: canvas windows are drawn through a `RescaleRenderElement`,
+i.e. the GLES renderer samples the full-size client buffer with plain bilinear filtering and no
+mipmaps. At zoom `z` one output pixel covers `1/z` texels per axis but bilinear filtering reads
+only 2×2 of them, so below ~0.6 most texels are skipped: glyph strokes drop out, letters turn
+blocky, and the result shimmers while panning. Title strips and region labels were already
+rasterized at the settled zoom (they are crisp, just small); no offscreen pass is involved.
+
+Fix (`src/render_helpers/minify.rs`, `shaders/minify*.frag`): canvas render elements are
+wrapped in `MinifyRenderElement` (new type of the `WorkspaceRenderElement::Canvas` variant).
+For every texture it draws with more than 1.25 texels per output pixel (`k`, from the element's
+`src`/`dst` area ratio, so buffer scale, viewporter and 90° transforms count), it overrides the
+texture shader with one that averages `ceil(k)²` bilinear taps (2..8 per axis) spread over the
+pixel's footprint, taken from `dFdx/dFdy` of the texture coordinates
+(`GL_OES_standard_derivatives`). Clipped surfaces (rounded corners, `clip-to-geometry`) get the
+same through a minifying variant of `clipped_surface.frag` (`minify::clipped_program`, called
+from `ClippedSurfaceRenderElement::draw`). Windows at zoom ≥ 0.8, strip workspaces and zoom 1
+draw exactly as before (pixel-identical screenshots at 100%). If the shaders fail to compile
+the old bilinear path is used. `smooth-zoom-out false` turns it off.
+
+Cost: one pass, no offscreen buffers, no extra memory, no CPU work. Texture reads per window
+≈ `ceil(1/z)² · z²` × its area at 100%: 1.54× at 0.62, 1.0× at 0.5, 1.44× at 0.4, 1.0× at 0.25
+(the covered area shrinks as fast as the taps grow). Ten 800×600 windows cost at most ~7.4 M
+bilinear fetches per fully redrawn frame, ~1.3 G/s at 180 Hz — around 1% of the texture rate of
+a current desktop AMD GPU; static canvases are not redrawn (damage is unchanged).
+
+Not covered: the interactive-move tile while dragged over a canvas, and strip windows in the
+overview, are still drawn with plain bilinear filtering.
+
+### Files
+
+| File | Change |
+| --- | --- |
+| `src/render_helpers/minify.rs` (new) | `MinifyRenderElement`, `minify_taps`, `clipped_program`, shader compilation, tests |
+| `src/render_helpers/shaders/minify.frag`, `minify_texture.frag` (new) | supersampling function, default texture shader with it |
+| `src/render_helpers/{mod,shaders/mod}.rs` | `mod minify`; `Shaders.minify` |
+| `src/render_helpers/clipped_surface.rs` | `draw` picks the minifying variant via `minify::clipped_program` (2 × 3 lines) |
+| `src/layout/workspace.rs` | `Canvas` variant wraps `MinifyRenderElement` |
+| `src/layout/workspace/canvas_ext.rs` | `canvas_zoom_by`, `canvas_animate_to_with`, minify wrapper in `render_canvas` |
+| `src/layout/canvas.rs` | velocity carry-over, `carried_zoom_velocity`, `scroll_zoom_factor`, `zoom_by_target`, step skipping, `Layout::canvas_zoom_by_at`, tests |
+| `src/input/canvas_actions.rs`, `src/input/mod.rs` | `State::canvas_scroll_zoom`, called first in `on_pointer_axis` |
+| `niri-config/src/{canvas,animations,lib}.rs` | `wheel-zoom-factor`, `smooth-zoom-out`, `canvas-wheel-zoom`, parse tests, snapshot |
+| `src/tests/canvas_input.rs` | Mod+wheel client tests |
+
+No IPC changes.
+
+### Legibility at the minimum zoom (proposal, not built)
+
+With proper filtering, 9–11 px terminal text is readable down to about 0.4 and becomes grey
+texture below (3 px glyphs at 0.25); title strips at 0.4 have 4.4 px text. A cheap aid if wanted:
+below a configurable zoom (e.g. `title-labels-below 0.5`), draw each window's title as a label
+with a constant on-screen size (e.g. 12 px) over the top of the scaled strip, from the existing
+title-text texture cache rasterized at output scale (not × zoom), ellipsized to the scaled tile
+width and culled when that is narrower than ~40 px. One extra texture element per visible
+window, re-rasterized only when the title or the tile width bucket changes.

@@ -6,7 +6,7 @@ use knuffel::ast::SpannedNode;
 use knuffel::errors::DecodeError;
 use knuffel::Decode as _;
 
-use crate::canvas::{CanvasPanAnim, CanvasZoomAnim};
+use crate::canvas::{CanvasPanAnim, CanvasWheelZoomAnim, CanvasZoomAnim};
 use crate::utils::{expand_home_path, expect_only_children, parse_arg_node, MergeWith};
 use crate::{FloatOrInt, Includes};
 
@@ -28,6 +28,7 @@ pub struct Animations {
     // ashd: infinite canvas view animations.
     pub canvas_pan: CanvasPanAnim,
     pub canvas_zoom: CanvasZoomAnim,
+    pub canvas_wheel_zoom: CanvasWheelZoomAnim,
 }
 
 impl Default for Animations {
@@ -48,6 +49,7 @@ impl Default for Animations {
             recent_windows_close: Default::default(),
             canvas_pan: Default::default(),
             canvas_zoom: Default::default(),
+            canvas_wheel_zoom: Default::default(),
         }
     }
 }
@@ -87,6 +89,8 @@ pub struct AnimationsPart {
     pub canvas_pan: Option<CanvasPanAnim>,
     #[knuffel(child)]
     pub canvas_zoom: Option<CanvasZoomAnim>,
+    #[knuffel(child)]
+    pub canvas_wheel_zoom: Option<CanvasWheelZoomAnim>,
 }
 
 impl MergeWith<AnimationsPart> for Animations {
@@ -115,6 +119,7 @@ impl MergeWith<AnimationsPart> for Animations {
             recent_windows_close,
             canvas_pan,
             canvas_zoom,
+            canvas_wheel_zoom,
         );
     }
 }

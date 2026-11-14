@@ -23,6 +23,8 @@ pub struct Shaders {
     pub custom_open: RefCell<Option<ShaderProgram>>,
     /// ashd: canvas plane grid and region outlines.
     pub canvas_grid: Option<ShaderProgram>,
+    /// ashd: supersampled minification of textures on zoomed-out canvases.
+    pub minify: super::minify::MinifyPrograms,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,6 +187,7 @@ impl Shaders {
             custom_close: RefCell::new(None),
             custom_open: RefCell::new(None),
             canvas_grid,
+            minify: super::minify::MinifyPrograms::compile(renderer), // ashd
         }
     }
 
