@@ -28,6 +28,13 @@ You can get raw events from `niri msg --json event-stream`, or by connecting to 
 
 You can find the full list of events along with documentation [here](https://niri-wm.github.io/niri/niri_ipc/enum.Event.html).
 
+### rice fork extensions
+
+The rice fork adds canvas/strip view state, canvas window positions and hidden (scratchpad)
+workspaces to the IPC (`niri msg canvas-views`, `hide-window`, `unhide-window`, new events and
+fields). All additions are backward compatible; see the "IPC for the shell" section of
+`RICE-FORK.md` at the repository root for the reference with JSON examples.
+
 ### Programmatic Access
 
 `niri msg --json` is a thin wrapper over writing and reading to a socket.

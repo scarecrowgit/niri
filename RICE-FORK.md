@@ -101,18 +101,29 @@ Binds / actions (`niri msg action <name>`; canvas-only actions are no-ops on str
 | `set-workspace-mode "canvas"` | `SetWorkspaceMode { mode }` | `strip` / `canvas` |
 | `canvas-pan-left` / `-right` / `-up` / `-down` | `CanvasPanLeft {}` … | one `pan-step` |
 | `canvas-pan-to X Y` | `CanvasPanTo { x, y }` | offset becomes (X, Y): the view's top-left shows that plane point |
-| `canvas-zoom-in` / `canvas-zoom-out` | `CanvasZoomIn {}` / `CanvasZoomOut {}` | next/previous zoom step |
+| `canvas-zoom-in` / `canvas-zoom-out` | `CanvasZoomIn { at_cursor }` / `CanvasZoomOut { at_cursor }` | next/previous zoom step (`at-cursor=true`: around the pointer) |
 | `canvas-set-zoom Z` | `CanvasSetZoom { zoom }` | clamped |
 | `canvas-fit` | `CanvasFit {}` | |
 | `canvas-home` | `CanvasHome {}` | |
 | `canvas-fly-to-window` | `CanvasFlyToWindow { id }` | `--id` optional |
 | `toggle-window-pinned` | `ToggleWindowPinned { id }` | `--id` optional |
+| `hide-window` | `HideWindow { id }` | `--id` optional; to the scratchpad (hidden workspace) |
+| `unhide-window` | `UnhideWindow { id }` | `--id` optional, default most recently hidden |
 
+The scratchpad is a named workspace with `hidden` (see "Hidden workspaces" below):
+
+```kdl
+workspace "scratch" {
+    hidden
+}
+```
+
+Pointer/gesture and decoration actions and options are listed in their own sections below.
 All new variants are appended at the end of both `Action` enums.
 
 IPC state: `niri_ipc::Workspace` has a new `mode: WorkspaceMode` field with `#[serde(default)]`
-(old replies without it parse as `Strip`). A mode change currently triggers a full
-`WorkspacesChanged` event.
+(old replies without it parse as `Strip`). A mode change sends `WorkspaceModeChanged`; see
+"IPC for the shell" below for the canvas/strip view state and the scratchpad.
 
 ## Coordinate model and architecture
 
@@ -147,7 +158,11 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `src/input/canvas_actions.rs` | `State::do_canvas_action`, `CanvasActionHook` (reveal / edge-push after keyboard actions) |
 | `src/layout/tests/canvas.rs` | layout-level canvas tests |
 | `niri-config/src/canvas.rs` | `Canvas`/`CanvasPart`, `CanvasPanAnim`/`CanvasZoomAnim`, parse tests |
-| `niri-ipc/src/canvas.rs` | `WorkspaceMode` |
+| `niri-ipc/src/canvas.rs` | `WorkspaceMode`, `CanvasViewState`, `StripViewState` |
+| `src/layout/scratch.rs` | hidden (scratchpad) workspaces: `ScratchOrigin`, Layout-level `hide_window`/`unhide_window`/`hidden_windows` |
+| `src/layout/workspace/scratch_ext.rs` | child module of `workspace`: `is_hidden`/`set_hidden`, origin hooks for tiles entering/leaving a workspace |
+| `src/input/scratch_actions.rs` | `State::do_scratch_action` (`hide-window`, `unhide-window`) |
+| `src/layout/tests/scratch.rs` | hidden workspace tests |
 
 ### Upstream files touched
 
@@ -164,6 +179,15 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `src/niri.rs` | `State::focus_window` reveals | focus by id / previous / alt-tab |
 | `src/ipc/server.rs` | `Workspace.mode`, change detection | IPC |
 | `niri-ipc/src/lib.rs` | `mod canvas`, `Workspace.mode`, new `Action` variants | IPC |
+| `src/layout/monitor.rs` (scratchpad) | visual workspace indices for switch animations/gestures/render geometry, hidden workspaces skipped by up/down navigation and filtered from render/hit-test iterators, `ensure_active_visible`, activation guard | hidden workspaces |
+| `src/layout/mod.rs` (IPC/scratchpad) | `pub mod scratch`; `activate_window(_without_raising)` ignore hidden windows and compare gesture indices visually; `update_config` sets `hidden`; `add_output` keeps the active workspace visible | hidden workspaces |
+| `src/layout/workspace.rs` (IPC/scratchpad) | `hidden` field + init, cleared by `unname`; `mod scratch_ext`; origin hooks in `add_tile`, `remove_tile`, `remove_active_column`, `add_column`; `tiles_with_ipc_layouts` uses `canvas_floating_ipc_layouts` | hidden workspaces, canvas IPC fields |
+| `src/layout/tile.rs` | `scratch_origin` field; `ipc_layout_template` fills the new `WindowLayout` fields | scratchpad origin travels with the window |
+| `src/layout/workspace/canvas_ext.rs`, `floating/canvas_mode.rs`, `scrolling/strip_snapshot.rs` | `canvas_floating_ipc_layouts`, `canvas_stored_positions`, `ipc_column_xs` (read-only) | IPC |
+| `src/ipc/{server,client}.rs`, `src/cli.rs` | canvas/strip view diffing, `CanvasViews` request, `WorkspaceModeChanged`, new fields; `niri msg canvas-views` | IPC |
+| `src/ui/mru.rs` | skip hidden workspaces | scratchpad |
+| `src/input/mod.rs` (scratchpad) | `mod scratch_actions`; one match arm | actions |
+| `niri-config/src/workspace.rs` | `hidden` flag + parse tests | config |
 | `niri-config/src/{lib,layout,animations,binds}.rs` | `mod canvas`, layout/animation fields, `Animation::decode_node` made `pub(crate)`, new bind actions; the big `parse` snapshot gained the new default fields | config |
 
 ## Public API for follow-up work
@@ -211,19 +235,164 @@ Implemented, see "Canvas pointer input" below. `Workspace::canvas_window_under()
 zoom ≠ 1, and `Niri::contents_under()` turns it into a pointer focus with scaled surface-local
 coordinates.
 
-### Planned IPC shape (next agent)
+### IPC
 
-- `WindowLayout.pos_in_canvas: Option<(f64, f64)>` – plane position of the tile (canvas windows),
-  from `FloatingSpace::canvas_plane_rect`.
-- `WindowLayout.is_pinned: bool` (serde default).
-- `Event::WorkspaceModeChanged { id, mode }` (instead of the current full `WorkspacesChanged`).
-- `Event::CanvasViewChanged { workspace_id, offset, zoom, target_offset, target_zoom, view_size }`
-  emitted at most once per frame (compare against the last sent value after
-  `advance_animations`).
-- `Request::CanvasViews` → current/target transform and view size of every canvas workspace.
+Implemented, see "IPC for the shell" below.
 
-Note that `WindowLayout.tile_pos_in_workspace_view` of canvas windows is already in real view
-coordinates (scaled by the zoom); `tile_size`/`window_size` stay logical, unscaled.
+## IPC for the shell: canvas views, strip views, scratchpad
+
+Everything here is append-only and backward compatible: new struct fields carry
+`#[serde(default)]` (old payloads without them parse; a new client against an old compositor
+sees the defaults), new `Request`/`Response`/`Event`/`Action` variants are appended at the end.
+A vendored *old* `niri-ipc` fails to parse the new event variants, so the shell's copy must be
+updated together with the compositor (unknown events can be skipped by parsing each line as
+`serde_json::Value` first).
+
+### New fields
+
+| Type | Field | Meaning |
+| --- | --- | --- |
+| `Workspace` | `mode: WorkspaceMode` (`"Strip"` / `"Canvas"`) | window arrangement mode (existed) |
+| `Workspace` | `is_hidden: bool` | hidden (scratchpad) workspace, see below |
+| `Window` | `hidden_from_workspace_id: Option<u64>` | while the window is on a hidden workspace: the (still existing) workspace it was hidden from; `null` if unknown (opened there) or gone |
+| `WindowLayout` | `pos_in_canvas: Option<(f64, f64)>` | top-left of the tile on the canvas plane, for windows on a canvas plane. Plane units = unscaled logical px; the size on the plane is `tile_size`. Does not change while the view pans/zooms |
+| `WindowLayout` | `is_pinned: bool` | pinned canvas window (stays on screen while panning) |
+
+`WindowLayout.tile_pos_in_workspace_view` of canvas windows is in real (zoomed) view
+coordinates *at the settled view* (target transform), and `null` for tiles outside it — the same
+"stationary" semantics as strip windows, so a pan or zoom animation produces one
+`WindowLayoutsChanged` batch (when the target changes), not one per frame. For live positions
+during an animation combine `pos_in_canvas` with `CanvasViewChanged`:
+`view = (pos_in_canvas - offset) * zoom`. Fullscreen/maximized windows of a canvas workspace are
+not on the plane (`pos_in_canvas: null`).
+
+```json
+{"id":7,"title":"foot","app_id":"foot","pid":4242,"workspace_id":3,"is_focused":true,
+ "is_floating":true,"is_urgent":false,
+ "layout":{"pos_in_scrolling_layout":null,"tile_size":[802.0,602.0],"window_size":[800,600],
+           "tile_pos_in_workspace_view":[611.0,224.0],"window_offset_in_tile":[1.0,1.0],
+           "pos_in_canvas":[559.0,239.0],"is_pinned":false},
+ "focus_timestamp":{"secs":5321,"nanos":12000000},"hidden_from_workspace_id":null}
+```
+
+### Canvas views
+
+`CanvasViewState` (`niri_ipc::CanvasViewState`, also in `niri_ipc::canvas`):
+
+```json
+{"workspace_id":3,"offset":[-411.5,-120.25],"zoom":0.62,
+ "target_offset":[-300.0,-120.25],"target_zoom":0.62,
+ "view_size":[1920.0,1080.0],"animating":true,
+ "regions":[{"name":"notes","x":-400.0,"y":0.0,"w":800.0,"h":600.0}]}
+```
+
+`regions` (serde default `[]`) are the named plane rectangles of the workspace (config
+`canvas { region ... }` plus `canvas-add-region` / `canvas-remove-region`), in plane units, for
+the minimap. A region change is sent right away as a `CanvasViewChanged` for that workspace.
+
+`view = (plane - offset) * zoom`, `plane = view / zoom + offset`; view coordinates are logical
+px relative to the workspace's top-left on its output (= the output for the active workspace
+outside the overview). `view_size` is the output size. `offset`/`zoom` are what is on screen
+right now, `target_*` where the view settles.
+
+- `Request::CanvasViews` → `Response::CanvasViews(Vec<CanvasViewState>)`: every canvas-mode
+  workspace (hidden ones included), read live on the compositor thread.
+  Request JSON: `"CanvasViews"`. CLI: `niri msg canvas-views` / `niri msg --json canvas-views`.
+- `Event::CanvasViewsChanged { views }`: the full set; sent on event-stream connect and
+  whenever a workspace enters/leaves canvas mode or a canvas workspace is created/removed.
+- `Event::CanvasViewChanged { view }`: one workspace's view changed. While the view animates
+  (pan, zoom, fit, reveal, edge-push, pan/zoom gestures), changes are sent **at most once per
+  frame of the workspace's output** (compared against the last sent state in the IPC refresh,
+  keyed on the output's frame-callback sequence). The state where the animation ends
+  (`animating: false`) and view-size changes are always sent right away.
+
+```json
+{"CanvasViewsChanged":{"views":[{"workspace_id":3,"offset":[0.0,0.0],"zoom":1.0,"target_offset":[-588.4,-331.9],"target_zoom":0.62,"view_size":[1920.0,1080.0],"animating":true}]}}
+{"CanvasViewChanged":{"view":{"workspace_id":3,"offset":[-300.1,-169.3],"zoom":0.71,"target_offset":[-588.4,-331.9],"target_zoom":0.62,"view_size":[1920.0,1080.0],"animating":true}}}
+{"CanvasViewChanged":{"view":{"workspace_id":3,"offset":[-588.4,-331.9],"zoom":0.62,"target_offset":[-588.4,-331.9],"target_zoom":0.62,"view_size":[1920.0,1080.0],"animating":false}}}
+```
+
+- `Event::WorkspaceModeChanged { id, mode }` replaces the full `WorkspacesChanged` that a mode
+  toggle used to send: `{"WorkspaceModeChanged":{"id":3,"mode":"Canvas"}}`. It is followed by
+  `CanvasViewsChanged` / `StripViewsChanged` (the sets changed) and `WindowLayoutsChanged`
+  (windows got or lost `pos_in_canvas`).
+
+Reducer: `niri_ipc::state::EventStreamState` has two new parts, `canvas: CanvasState`
+(`views: HashMap<workspace id, CanvasViewState>`) and `strip: StripState`
+(`views: HashMap<workspace id, StripViewState>`); `WorkspacesState` applies
+`WorkspaceModeChanged`.
+
+### Strip header
+
+Column order, widths and the focused column are derivable from the existing data:
+`WindowLayout.pos_in_scrolling_layout` = (column, tile), 1-based; the column width is the
+`tile_size.0` of its tiles; the focused column is the one of the workspace's
+`active_window_id` (or of the window with `is_focused`). What was missing is the *live* scroll
+position, now in `StripViewState`:
+
+```json
+{"workspace_id":1,"view_offset":812.3,"target_view_offset":976.0,
+ "working_area_width":1920.0,"column_xs":[0.0,976.0,1952.0]}
+```
+
+Strip coordinates: x = 0 at the left edge of the first column, columns separated by the gaps;
+`column_xs[i]` is the strip x of column `i + 1`. Column `i + 1` is drawn at workspace view x
+`column_xs[i] - view_offset` right now (the tile's own x offset inside its column aside).
+`target_view_offset` is where the view settles.
+
+- `Event::StripViewsChanged { views }`: full set (all strip-mode workspaces); sent on connect and
+  whenever the set changes.
+- `Event::StripViewChanged { workspace_id, view_offset, target_view_offset, working_area_width,
+  column_xs }`: one workspace changed. Scrolling animations and gestures are limited to one event
+  per output frame; the settled position and column-layout/working-area changes are sent
+  immediately. `{"StripViewChanged":{"workspace_id":1,"view_offset":900.0,"target_view_offset":976.0,"working_area_width":1920.0,"column_xs":[0.0,976.0,1952.0]}}`
+
+### Hidden workspaces (scratchpad)
+
+```kdl
+workspace "scratch" {
+    hidden
+}
+```
+
+A named workspace with `hidden` keeps its real index on its monitor (IPC `idx`,
+`focus-workspace N`, `move-window-to-workspace N` still count it), but:
+
+- it never becomes the active workspace: `focus-workspace "scratch"` (by name, index or id) is a
+  **no-op** (it may still move the focus to the monitor the scratch workspace is on);
+  `focus-workspace-up/down`, `focus-window-or-workspace-up/down`, `focus-workspace-previous`,
+  `move-window/column-to-workspace-up/down`, `move-workspace-up/down`, workspace-switch
+  gestures (touchpad, mouse, DnD edge scroll in the overview) and their bounds skip it;
+- it is not rendered and takes no space, normally and in the overview (switch animations and
+  gestures run in "visual" indices that count only visible workspaces);
+- its windows are not in the recent-windows switcher; activation (`focus-window --id`,
+  xdg-activation / urgency, focus-follows-mouse) does not show or focus them;
+- it is never removed while it is named (its config entry keeps it); unnaming it (config entry
+  removed, `unset-workspace-name`) makes it a normal workspace. Adding `hidden` to the config entry
+  of the currently active workspace moves the monitor to the nearest visible workspace.
+
+Hiding and showing:
+
+| Bind action | IPC action | Behaviour |
+| --- | --- | --- |
+| `hide-window` | `HideWindow { id }` (`--id` optional, default focused) | to the first hidden workspace of the window's monitor (else of any monitor), without following it |
+| `unhide-window` | `UnhideWindow { id }` (`--id` optional, default *most recently hidden*) | back to the workspace it was hidden from if that still exists (else the focused workspace), then focused like `focus-window --id` |
+
+The generic actions work too and remember the origin the same way, e.g.
+`niri msg action move-window-to-workspace --window-id 7 --focus false scratch` to hide and
+`niri msg action move-window-to-workspace --window-id 7 3` + `niri msg action focus-window --id 7`
+to show. Every window carries where it was last removed from (workspace and, on a canvas, its
+plane position): returning from a hidden workspace to *that* canvas puts it back at its plane
+position; any other canvas gets it at the viewport centre; a strip workspace gets it as a new
+column right of the focused one.
+
+For the scratchpad list: `Windows` / `WindowOpenedOrChanged` report hidden windows with the
+hidden workspace's `workspace_id` and `hidden_from_workspace_id`; `Workspace.is_hidden` tells
+which workspaces are hidden. `niri msg workspaces` marks them `(hidden)` (and canvas ones
+`(canvas)`).
+
+Not covered: the ext-workspace protocol (`ext_workspace.rs`) still announces hidden workspaces
+to third-party bars; activating one there is a no-op.
 
 ## Building and running nested
 
@@ -282,10 +451,9 @@ private D-Bus session, and the built `niri -c test.kdl` started inside it with
 
 ## Follow-ups
 
-- IPC events and requests listed above.
-- Hidden workspace for a scratchpad.
 - ~~Scaled pointer input, Mod+drag pan, Mod+wheel zoom-at-cursor~~: done, see "Canvas
   pointer input" below. Open: touch input and pointer constraints at zoom ≠ 1.
+- ~~IPC events and requests; hidden scratchpad workspace~~: done, see "IPC for the shell" above.
 - ~~Plane grid / dot background, named regions, title strips~~: done, see "Decorations" below.
 
 ## Canvas pointer input
