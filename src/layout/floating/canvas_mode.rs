@@ -182,6 +182,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
         })
     }
 
+    /// rice IPC: per tile, in tile order, whether it is pinned and its stored (target, not
+    /// animated) position: the plane position, or the unscaled view position of a pinned tile.
+    pub fn canvas_stored_positions(
+        &self,
+    ) -> impl Iterator<Item = (bool, Point<f64, Logical>)> + '_ {
+        self.data.iter().map(|data| (data.pinned, data.logical_pos))
+    }
+
     /// Plane rectangle of a tile.
     pub fn canvas_plane_rect(&self, id: &W::Id) -> Option<Rectangle<f64, Logical>> {
         self.canvas_plane_rects()

@@ -84,6 +84,7 @@ pub mod focus_ring;
 pub mod insert_hint_element;
 pub mod monitor;
 pub mod opening_window;
+pub mod scratch; // rice
 pub mod scrolling;
 pub mod shadow;
 pub mod tab_indicator;
@@ -861,6 +862,7 @@ impl<W: LayoutElement> Layout<W> {
                     }
 
                     let source = &mut monitors[source_idx];
+                    source.ensure_active_visible(); // rice
 
                     // If we stopped a workspace switch, then we might need to clean up workspaces.
                     // Also if empty_workspace_above_first is set and there are only 2 workspaces
@@ -1627,14 +1629,21 @@ impl<W: LayoutElement> Layout<W> {
         for (monitor_idx, mon) in monitors.iter_mut().enumerate() {
             for (workspace_idx, ws) in mon.workspaces.iter_mut().enumerate() {
                 if ws.activate_window(window) {
+                    // rice: windows on hidden workspaces can't be focused by activation.
+                    if ws.is_hidden() {
+                        return;
+                    }
+
                     *active_monitor_idx = monitor_idx;
 
                     // If currently in the middle of a vertical swipe between the target workspace
                     // and some other, don't switch the workspace.
+                    // rice: gesture indices are visual.
+                    let visual_idx = mon.visual_idx(workspace_idx) as f64;
                     match &mon.workspace_switch {
                         Some(WorkspaceSwitch::Gesture(gesture))
-                            if gesture.current_idx.floor() == workspace_idx as f64
-                                || gesture.current_idx.ceil() == workspace_idx as f64 => {}
+                            if gesture.current_idx.floor() == visual_idx
+                                || gesture.current_idx.ceil() == visual_idx => {}
                         _ => mon.switch_workspace(workspace_idx),
                     }
 
@@ -1663,14 +1672,21 @@ impl<W: LayoutElement> Layout<W> {
         for (monitor_idx, mon) in monitors.iter_mut().enumerate() {
             for (workspace_idx, ws) in mon.workspaces.iter_mut().enumerate() {
                 if ws.activate_window_without_raising(window) {
+                    // rice: windows on hidden workspaces can't be focused by activation.
+                    if ws.is_hidden() {
+                        return;
+                    }
+
                     *active_monitor_idx = monitor_idx;
 
                     // If currently in the middle of a vertical swipe between the target workspace
                     // and some other, don't switch the workspace.
+                    // rice: gesture indices are visual.
+                    let visual_idx = mon.visual_idx(workspace_idx) as f64;
                     match &mon.workspace_switch {
                         Some(WorkspaceSwitch::Gesture(gesture))
-                            if gesture.current_idx.floor() == workspace_idx as f64
-                                || gesture.current_idx.ceil() == workspace_idx as f64 => {}
+                            if gesture.current_idx.floor() == visual_idx
+                                || gesture.current_idx.ceil() == visual_idx => {}
                         _ => mon.switch_workspace(workspace_idx),
                     }
 
@@ -3049,6 +3065,7 @@ impl<W: LayoutElement> Layout<W> {
             let Some(name) = ws.name() else { continue };
             if let Some(config) = config.workspaces.iter().find(|w| &w.name.0 == name) {
                 ws.update_layout_config(config.layout.clone().map(|x| x.0));
+                ws.set_hidden(config.hidden); // rice
             }
         }
 

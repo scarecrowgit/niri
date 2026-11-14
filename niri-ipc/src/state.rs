@@ -9,7 +9,7 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
-use crate::{Cast, Event, KeyboardLayouts, Window, Workspace};
+use crate::{CanvasViewState, Cast, Event, KeyboardLayouts, StripViewState, Window, Workspace};
 
 /// Part of the state communicated via the event stream.
 pub trait EventStreamStatePart {
@@ -52,6 +52,12 @@ pub struct EventStreamState {
 
     /// State of touchpads.
     pub touchpad: TouchpadState,
+
+    /// State of the canvas views (rice fork).
+    pub canvas: CanvasState,
+
+    /// State of the strip (scrolling layout) views (rice fork).
+    pub strip: StripState,
 }
 
 /// The workspaces state communicated over the event stream.
@@ -96,6 +102,20 @@ pub struct CastsState {
     pub casts: HashMap<u64, Cast>,
 }
 
+/// The canvas view state communicated over the event stream (rice fork).
+#[derive(Debug, Default)]
+pub struct CanvasState {
+    /// Map from a workspace id to the view of that canvas-mode workspace.
+    pub views: HashMap<u64, CanvasViewState>,
+}
+
+/// The strip view state communicated over the event stream (rice fork).
+#[derive(Debug, Default)]
+pub struct StripState {
+    /// Map from a workspace id to the scroll state of that strip-mode workspace.
+    pub views: HashMap<u64, StripViewState>,
+}
+
 /// The touchpad state communicated over the event stream.
 #[derive(Debug, Default)]
 pub struct TouchpadState {
@@ -118,6 +138,8 @@ impl EventStreamStatePart for EventStreamState {
         events.extend(self.config.replicate());
         events.extend(self.casts.replicate());
         events.extend(self.touchpad.replicate());
+        events.extend(self.canvas.replicate());
+        events.extend(self.strip.replicate());
         events
     }
 
@@ -129,6 +151,8 @@ impl EventStreamStatePart for EventStreamState {
         let event = self.config.apply(event)?;
         let event = self.casts.apply(event)?;
         let event = self.touchpad.apply(event)?;
+        let event = self.canvas.apply(event)?;
+        let event = self.strip.apply(event)?;
         Some(event)
     }
 }
@@ -174,6 +198,11 @@ impl EventStreamStatePart for WorkspacesState {
                 let ws = self.workspaces.get_mut(&workspace_id);
                 let ws = ws.expect("changed workspace was missing from the map");
                 ws.active_window_id = active_window_id;
+            }
+            Event::WorkspaceModeChanged { id, mode } => {
+                let ws = self.workspaces.get_mut(&id);
+                let ws = ws.expect("changed workspace was missing from the map");
+                ws.mode = mode;
             }
             event => return Some(event),
         }
@@ -352,5 +381,222 @@ impl EventStreamStatePart for TouchpadState {
             event => return Some(event),
         }
         None
+    }
+}
+
+impl EventStreamStatePart for CanvasState {
+    fn replicate(&self) -> Vec<Event> {
+        let mut views: Vec<_> = self.views.values().cloned().collect();
+        views.sort_by_key(|view| view.workspace_id);
+        vec![Event::CanvasViewsChanged { views }]
+    }
+
+    fn apply(&mut self, event: Event) -> Option<Event> {
+        match event {
+            Event::CanvasViewsChanged { views } => {
+                self.views = views
+                    .into_iter()
+                    .map(|view| (view.workspace_id, view))
+                    .collect();
+            }
+            Event::CanvasViewChanged { view } => {
+                self.views.insert(view.workspace_id, view);
+            }
+            event => return Some(event),
+        }
+        None
+    }
+}
+
+impl EventStreamStatePart for StripState {
+    fn replicate(&self) -> Vec<Event> {
+        let mut views: Vec<_> = self.views.values().cloned().collect();
+        views.sort_by_key(|view| view.workspace_id);
+        vec![Event::StripViewsChanged { views }]
+    }
+
+    fn apply(&mut self, event: Event) -> Option<Event> {
+        match event {
+            Event::StripViewsChanged { views } => {
+                self.views = views
+                    .into_iter()
+                    .map(|view| (view.workspace_id, view))
+                    .collect();
+            }
+            Event::StripViewChanged {
+                workspace_id,
+                view_offset,
+                target_view_offset,
+                working_area_width,
+                column_xs,
+            } => {
+                let view = StripViewState {
+                    workspace_id,
+                    view_offset,
+                    target_view_offset,
+                    working_area_width,
+                    column_xs,
+                };
+                self.views.insert(workspace_id, view);
+            }
+            event => return Some(event),
+        }
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{WindowLayout, WorkspaceMode};
+
+    fn workspace(id: u64, mode: WorkspaceMode) -> Workspace {
+        Workspace {
+            id,
+            idx: id as u8,
+            name: None,
+            output: Some(String::from("out")),
+            is_urgent: false,
+            is_active: id == 1,
+            is_focused: id == 1,
+            active_window_id: None,
+            mode,
+            is_hidden: false,
+        }
+    }
+
+    fn canvas_view(workspace_id: u64, x: f64, animating: bool) -> CanvasViewState {
+        CanvasViewState {
+            workspace_id,
+            offset: (x, 0.),
+            zoom: 0.62,
+            target_offset: (100., 0.),
+            target_zoom: 0.62,
+            view_size: (1920., 1080.),
+            animating,
+            regions: Vec::new(),
+        }
+    }
+
+    fn strip_view(workspace_id: u64, x: f64) -> StripViewState {
+        StripViewState {
+            workspace_id,
+            view_offset: x,
+            target_view_offset: 200.,
+            working_area_width: 1920.,
+            column_xs: vec![0., 1000.],
+        }
+    }
+
+    /// Applies events to a fresh state, then checks that replicating it gives the same state.
+    fn apply_all(events: impl IntoIterator<Item = Event>) -> EventStreamState {
+        let mut state = EventStreamState::default();
+        for event in events {
+            assert!(state.apply(event).is_none());
+        }
+
+        let mut copy = EventStreamState::default();
+        for event in state.replicate() {
+            assert!(copy.apply(event).is_none());
+        }
+        assert_eq!(copy.workspaces.workspaces, state.workspaces.workspaces);
+        assert_eq!(copy.canvas.views, state.canvas.views);
+        assert_eq!(copy.strip.views, state.strip.views);
+
+        state
+    }
+
+    #[test]
+    fn workspace_mode_changed() {
+        let state = apply_all([
+            Event::WorkspacesChanged {
+                workspaces: vec![
+                    workspace(1, WorkspaceMode::Strip),
+                    workspace(2, WorkspaceMode::Strip),
+                ],
+            },
+            Event::WorkspaceModeChanged {
+                id: 2,
+                mode: WorkspaceMode::Canvas,
+            },
+        ]);
+        let ws = &state.workspaces.workspaces;
+        assert_eq!(ws[&1].mode, WorkspaceMode::Strip);
+        assert_eq!(ws[&2].mode, WorkspaceMode::Canvas);
+    }
+
+    #[test]
+    fn canvas_views() {
+        let state = apply_all([
+            Event::CanvasViewsChanged {
+                views: vec![canvas_view(1, 0., false), canvas_view(2, 0., false)],
+            },
+            Event::CanvasViewChanged {
+                view: canvas_view(2, 50., true),
+            },
+            Event::CanvasViewChanged {
+                view: canvas_view(2, 100., false),
+            },
+        ]);
+        assert_eq!(state.canvas.views.len(), 2);
+        assert_eq!(state.canvas.views[&2], canvas_view(2, 100., false));
+
+        // A full update replaces everything.
+        let mut state = state;
+        state.apply(Event::CanvasViewsChanged {
+            views: vec![canvas_view(3, 0., false)],
+        });
+        assert_eq!(state.canvas.views.keys().collect::<Vec<_>>(), [&3]);
+    }
+
+    #[test]
+    fn strip_views() {
+        let state = apply_all([
+            Event::StripViewsChanged {
+                views: vec![strip_view(1, 0.), strip_view(2, 0.)],
+            },
+            strip_view(1, 150.).into_event(),
+        ]);
+        assert_eq!(state.strip.views.len(), 2);
+        assert_eq!(state.strip.views[&1], strip_view(1, 150.));
+    }
+
+    #[test]
+    fn window_layouts_carry_canvas_fields() {
+        let window = Window {
+            id: 5,
+            title: None,
+            app_id: None,
+            pid: None,
+            workspace_id: Some(2),
+            is_focused: false,
+            is_floating: true,
+            is_urgent: false,
+            layout: WindowLayout {
+                pos_in_scrolling_layout: None,
+                tile_size: (100., 100.),
+                window_size: (100, 100),
+                tile_pos_in_workspace_view: None,
+                window_offset_in_tile: (0., 0.),
+                pos_in_canvas: Some((1., 2.)),
+                is_pinned: false,
+            },
+            focus_timestamp: None,
+            hidden_from_workspace_id: Some(1),
+        };
+        let mut moved = window.layout.clone();
+        moved.pos_in_canvas = Some((300., -40.));
+        moved.is_pinned = true;
+
+        let mut state = EventStreamState::default();
+        state.apply(Event::WindowsChanged {
+            windows: vec![window],
+        });
+        state.apply(Event::WindowLayoutsChanged {
+            changes: vec![(5, moved.clone())],
+        });
+        let win = &state.windows.windows[&5];
+        assert_eq!(win.layout, moved);
+        assert_eq!(win.hidden_from_workspace_id, Some(1));
     }
 }

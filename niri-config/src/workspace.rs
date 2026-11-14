@@ -10,6 +10,14 @@ pub struct Workspace {
     pub open_on_output: Vec<String>,
     #[knuffel(child)]
     pub layout: Option<WorkspaceLayoutPart>,
+    /// rice: hidden (scratchpad) workspace.
+    ///
+    /// A hidden workspace never becomes the active workspace of a monitor: it is skipped by
+    /// workspace navigation and gestures, not shown in the overview, and its windows are left out
+    /// of the recent-windows switcher. Windows are moved there and back explicitly (e.g. with
+    /// `hide-window` / `unhide-window`).
+    #[knuffel(child)]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,5 +101,44 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::DecodeScalar<S> for WorkspaceName {
                 Ok(Self(String::new()))
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Config;
+
+    #[test]
+    fn parse_hidden_workspace() {
+        let config = Config::parse_mem(
+            r#"
+            workspace "main"
+            workspace "scratch" {
+                hidden
+            }
+            workspace "other" {
+                open-on-output "DP-1"
+                layout {
+                    gaps 4
+                }
+            }
+            "#,
+        )
+        .unwrap();
+
+        let hidden: Vec<_> = config
+            .workspaces
+            .iter()
+            .map(|ws| (ws.name.0.as_str(), ws.hidden))
+            .collect();
+        assert_eq!(
+            hidden,
+            [("main", false), ("scratch", true), ("other", false)]
+        );
+    }
+
+    #[test]
+    fn hidden_takes_no_arguments() {
+        assert!(Config::parse_mem(r#"workspace "scratch" { hidden "yes"; }"#).is_err());
     }
 }

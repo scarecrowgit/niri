@@ -112,6 +112,8 @@ pub enum Msg {
     OverviewState,
     /// List screencasts.
     Casts,
+    /// List the views (pan/zoom) of canvas-mode workspaces.
+    CanvasViews,
     /// Send a raw JSON request to the compositor, reading from stdin.
     RawRequest,
 }

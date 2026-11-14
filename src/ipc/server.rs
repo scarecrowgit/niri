@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ffi::OsStr;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -17,8 +17,8 @@ use futures_util::{select_biased, AsyncBufReadExt, AsyncWrite, AsyncWriteExt, Fu
 use niri_config::OutputName;
 use niri_ipc::state::{EventStreamState, EventStreamStatePart as _};
 use niri_ipc::{
-    Action, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request, Response,
-    Timestamp, WindowLayout, Workspace,
+    Action, CanvasViewState, Event, KeyboardLayouts, OutputConfigChanged, Overview, Reply, Request,
+    Response, StripViewState, Timestamp, WindowLayout, Workspace,
 };
 use smithay::backend::input::InputTime;
 use smithay::desktop::layer_map_for_output;
@@ -34,7 +34,8 @@ use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 use crate::backend::IpcOutputMap;
 use crate::handlers::image_copy_capture::{source_mapped_id, source_output};
 use crate::input::pick_window_grab::PickWindowGrab;
-use crate::layout::workspace::WorkspaceId;
+use crate::layout::workspace::{Workspace as LayoutWorkspace, WorkspaceId};
+use crate::layout::Layout;
 use crate::niri::State;
 use crate::utils::{version, with_toplevel_role};
 use crate::window::Mapped;
@@ -50,6 +51,16 @@ pub struct IpcServer {
     pub socket_path: Option<PathBuf>,
     event_streams: Rc<RefCell<Vec<EventStreamSender>>>,
     event_stream_state: Rc<RefCell<EventStreamState>>,
+    /// rice: output frame (`frame_callback_sequence`) in which the last canvas/strip view event
+    /// was sent for a workspace, to send animated view changes at most once per frame.
+    view_event_frames: RefCell<ViewEventFrames>,
+}
+
+/// rice: per-workspace output frame of the last sent view event.
+#[derive(Debug, Default)]
+struct ViewEventFrames {
+    canvas: HashMap<u64, Option<u32>>,
+    strip: HashMap<u64, Option<u32>>,
 }
 
 struct ClientCtx {
@@ -111,6 +122,7 @@ impl IpcServer {
             socket_path,
             event_streams: Rc::new(RefCell::new(Vec::new())),
             event_stream_state: Rc::new(RefCell::new(EventStreamState::default())),
+            view_event_frames: RefCell::new(ViewEventFrames::default()),
         })
     }
 
@@ -459,6 +471,20 @@ async fn process(ctx: &ClientCtx, request: Request) -> Reply {
             let casts = state.casts.casts.values().cloned().collect();
             Response::Casts(casts)
         }
+        // rice: live canvas views (the event stream state may lag by up to a frame).
+        Request::CanvasViews => {
+            let (tx, rx) = async_channel::bounded(1);
+            ctx.event_loop.insert_idle(move |state| {
+                let views = canvas_view_states(&state.niri.layout)
+                    .into_iter()
+                    .map(|(view, _)| view)
+                    .collect::<Vec<_>>();
+                let _ = tx.send_blocking(views);
+            });
+            let result = rx.recv().await;
+            let views = result.map_err(|_| String::from("error getting canvas views"))?;
+            Response::CanvasViews(views)
+        }
     };
 
     Ok(response)
@@ -520,6 +546,7 @@ fn make_ipc_window(
     mapped: &Mapped,
     workspace_id: Option<WorkspaceId>,
     layout: WindowLayout,
+    hidden_from_workspace_id: Option<u64>,
 ) -> niri_ipc::Window {
     with_toplevel_role(mapped.toplevel(), |role| niri_ipc::Window {
         id: mapped.id().get(),
@@ -532,7 +559,82 @@ fn make_ipc_window(
         is_urgent: mapped.is_urgent(),
         layout,
         focus_timestamp: mapped.get_focus_timestamp().map(Timestamp::from),
+        hidden_from_workspace_id,
     })
+}
+
+/// rice: view state of a canvas-mode workspace.
+fn canvas_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<CanvasViewState> {
+    let view = ws.canvas_view()?;
+    let current = view.current();
+    let target = view.target();
+    Some(CanvasViewState {
+        workspace_id: ws.id().get(),
+        offset: current.offset.into(),
+        zoom: current.zoom,
+        target_offset: target.offset.into(),
+        target_zoom: target.zoom,
+        view_size: ws.view_size().into(),
+        animating: view.is_animating(),
+        regions: ws
+            .canvas_regions()
+            .into_iter()
+            .map(|r| niri_ipc::CanvasRegion {
+                name: r.name,
+                x: r.x,
+                y: r.y,
+                w: r.w,
+                h: r.h,
+            })
+            .collect(),
+    })
+}
+
+/// rice: scroll state of a strip-mode workspace.
+fn strip_view_state(ws: &LayoutWorkspace<Mapped>) -> Option<StripViewState> {
+    if ws.is_canvas() {
+        return None;
+    }
+    let scrolling = ws.scrolling();
+    Some(StripViewState {
+        workspace_id: ws.id().get(),
+        view_offset: scrolling.view_pos(),
+        target_view_offset: scrolling.target_view_pos(),
+        working_area_width: ws.working_area().size.w,
+        column_xs: scrolling.ipc_column_xs(),
+    })
+}
+
+/// rice: canvas views of all canvas workspaces with the output each one is on.
+fn canvas_view_states(
+    layout: &Layout<Mapped>,
+) -> Vec<(CanvasViewState, Option<smithay::output::Output>)> {
+    layout
+        .workspaces()
+        .filter_map(|(mon, _, ws)| {
+            let view = canvas_view_state(ws)?;
+            Some((view, mon.map(|mon| mon.output().clone())))
+        })
+        .collect()
+}
+
+/// rice: decides whether a view event is sent now.
+///
+/// Changes that only advance an animation or a gesture are sent at most once per output frame;
+/// the first state, a settling animation, and changes of the view size or column layout always go
+/// out right away.
+fn should_send_view_event(
+    forced: bool,
+    frame: Option<u32>,
+    last_frame: Option<&Option<u32>>,
+) -> bool {
+    if forced {
+        return true;
+    }
+    match (frame, last_frame) {
+        (Some(frame), Some(Some(last))) => frame != *last,
+        _ => true,
+    }
 }
 
 impl State {
@@ -588,6 +690,132 @@ impl State {
         self.ipc_refresh_workspaces();
         self.ipc_refresh_windows();
         self.ipc_refresh_overview();
+        // rice: canvas and strip view state.
+        self.ipc_refresh_canvas_views();
+        self.ipc_refresh_strip_views();
+    }
+
+    fn output_frame(&self, output: Option<&smithay::output::Output>) -> Option<u32> {
+        let state = self.niri.output_state.get(output?)?;
+        Some(state.frame_callback_sequence)
+    }
+
+    /// rice: sends canvas view changes.
+    fn ipc_refresh_canvas_views(&mut self) {
+        let Some(server) = &self.niri.ipc_server else {
+            return;
+        };
+
+        let _span = tracy_client::span!("State::ipc_refresh_canvas_views");
+
+        let views = canvas_view_states(&self.niri.layout);
+        let views: Vec<_> = views
+            .into_iter()
+            .map(|(view, output)| {
+                let frame = self.output_frame(output.as_ref());
+                (view, frame)
+            })
+            .collect();
+
+        let mut state = server.event_stream_state.borrow_mut();
+        let state = &mut state.canvas;
+        let mut frames = server.view_event_frames.borrow_mut();
+        let frames = &mut frames.canvas;
+
+        let mut events = Vec::new();
+        let same_set = views.len() == state.views.len()
+            && views
+                .iter()
+                .all(|(view, _)| state.views.contains_key(&view.workspace_id));
+        if !same_set {
+            frames.clear();
+            for (view, frame) in &views {
+                frames.insert(view.workspace_id, *frame);
+            }
+            let views = views.into_iter().map(|(view, _)| view).collect();
+            events.push(Event::CanvasViewsChanged { views });
+        } else {
+            for (view, frame) in views {
+                let old = &state.views[&view.workspace_id];
+                if *old == view {
+                    continue;
+                }
+                let forced = (old.animating && !view.animating)
+                    || old.view_size != view.view_size
+                    || old.regions != view.regions;
+                if !should_send_view_event(forced, frame, frames.get(&view.workspace_id)) {
+                    continue;
+                }
+                frames.insert(view.workspace_id, frame);
+                events.push(Event::CanvasViewChanged { view });
+            }
+        }
+
+        for event in events {
+            state.apply(event.clone());
+            server.send_event(event);
+        }
+    }
+
+    /// rice: sends strip (scrolling layout) view changes.
+    fn ipc_refresh_strip_views(&mut self) {
+        let Some(server) = &self.niri.ipc_server else {
+            return;
+        };
+
+        let _span = tracy_client::span!("State::ipc_refresh_strip_views");
+
+        let views: Vec<_> = self
+            .niri
+            .layout
+            .workspaces()
+            .filter_map(|(mon, _, ws)| {
+                let view = strip_view_state(ws)?;
+                let frame = self.output_frame(mon.map(|mon| mon.output()));
+                Some((view, frame))
+            })
+            .collect();
+
+        let mut state = server.event_stream_state.borrow_mut();
+        let state = &mut state.strip;
+        let mut frames = server.view_event_frames.borrow_mut();
+        let frames = &mut frames.strip;
+
+        let mut events = Vec::new();
+        let same_set = views.len() == state.views.len()
+            && views
+                .iter()
+                .all(|(view, _)| state.views.contains_key(&view.workspace_id));
+        if !same_set {
+            frames.clear();
+            for (view, frame) in &views {
+                frames.insert(view.workspace_id, *frame);
+            }
+            let views = views.into_iter().map(|(view, _)| view).collect();
+            events.push(Event::StripViewsChanged { views });
+        } else {
+            for (view, frame) in views {
+                let old = &state.views[&view.workspace_id];
+                if *old == view {
+                    continue;
+                }
+                let was_moving = old.view_offset != old.target_view_offset;
+                let settled = view.view_offset == view.target_view_offset;
+                let forced = (was_moving && settled)
+                    || old.column_xs != view.column_xs
+                    || old.working_area_width != view.working_area_width;
+                if !should_send_view_event(forced, frame, frames.get(&view.workspace_id)) {
+                    continue;
+                }
+                frames.insert(view.workspace_id, frame);
+                events.push(view.into_event());
+            }
+        }
+
+        for event in events {
+            state.apply(event.clone());
+            server.send_event(event);
+        }
     }
 
     fn ipc_refresh_workspaces(&mut self) {
@@ -618,15 +846,21 @@ impl State {
             };
 
             // Check for any changes that we can't signal as individual events.
-            // rice: including the workspace mode.
+            // rice: including the hidden flag.
             let output_name = mon.map(|mon| mon.output_name());
             if ipc_ws.idx != u8::try_from(ws_idx + 1).unwrap_or(u8::MAX)
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
-                || ipc_ws.mode != ws.mode()
+                || ipc_ws.is_hidden != ws.is_hidden()
             {
                 need_workspaces_changed = true;
                 break;
+            }
+
+            // rice: mode changes have their own event.
+            let mode = ws.mode();
+            if ipc_ws.mode != mode {
+                events.push(Event::WorkspaceModeChanged { id, mode });
             }
 
             let active_window_id = ws.active_window().map(|win| win.id().get());
@@ -678,7 +912,8 @@ impl State {
                         is_active: mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx),
                         is_focused: Some(id) == focused_ws_id,
                         active_window_id: ws.active_window().map(|win| win.id().get()),
-                        mode: ws.mode(), // rice
+                        mode: ws.mode(),           // rice
+                        is_hidden: ws.is_hidden(), // rice
                     }
                 })
                 .collect();
@@ -707,6 +942,13 @@ impl State {
 
         let mut batch_change_layouts: Vec<(u64, WindowLayout)> = Vec::new();
 
+        // rice: where the windows on hidden (scratchpad) workspaces were hidden from.
+        let hidden_from: HashMap<smithay::desktop::Window, Option<u64>> = layout
+            .hidden_windows()
+            .into_iter()
+            .map(|win| (win.id, win.origin.map(|id| id.get())))
+            .collect();
+
         // Check for window changes.
         let mut seen = HashSet::new();
         let mut focused_id = None;
@@ -718,8 +960,10 @@ impl State {
                 focused_id = Some(id);
             }
 
+            let hidden_from = hidden_from.get(&mapped.window).copied().flatten(); // rice
+
             let Some(ipc_win) = state.windows.get(&id) else {
-                let window = make_ipc_window(mapped, ws_id, window_layout);
+                let window = make_ipc_window(mapped, ws_id, window_layout, hidden_from);
                 events.push(Event::WindowOpenedOrChanged { window });
                 return;
             };
@@ -727,13 +971,14 @@ impl State {
             let workspace_id = ws_id.map(|id| id.get());
             let mut changed =
                 ipc_win.workspace_id != workspace_id || ipc_win.is_floating != mapped.is_floating();
+            changed |= ipc_win.hidden_from_workspace_id != hidden_from; // rice
 
             changed |= with_toplevel_role(mapped.toplevel(), |role| {
                 ipc_win.title != role.title || ipc_win.app_id != role.app_id
             });
 
             if changed {
-                let window = make_ipc_window(mapped, ws_id, window_layout);
+                let window = make_ipc_window(mapped, ws_id, window_layout, hidden_from);
                 events.push(Event::WindowOpenedOrChanged { window });
                 return;
             }

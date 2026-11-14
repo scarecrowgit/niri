@@ -73,6 +73,7 @@ pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
 pub mod resize_grab;
+pub mod scratch_actions; // rice
 pub mod scroll_swipe_gesture;
 pub mod scroll_tracker;
 pub mod spatial_movement_grab;
@@ -2817,6 +2818,13 @@ impl State {
             | Action::ToggleWindowPinned
             | Action::ToggleWindowPinnedById(_)) => {
                 self.do_canvas_action(action);
+            }
+            // rice: scratchpad actions.
+            action @ (Action::HideWindow
+            | Action::HideWindowById(_)
+            | Action::UnhideWindow
+            | Action::UnhideWindowById(_)) => {
+                self.do_scratch_action(action);
             }
             // rice: named canvas regions.
             action @ (Action::CanvasAddRegion(..) | Action::CanvasRemoveRegion(_)) => {

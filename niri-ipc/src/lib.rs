@@ -63,7 +63,7 @@ pub mod state;
 
 // rice: infinite canvas workspace mode types.
 pub mod canvas;
-pub use canvas::WorkspaceMode;
+pub use canvas::{CanvasRegion, CanvasViewState, StripViewState, WorkspaceMode};
 
 /// Request from client to niri.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -123,6 +123,8 @@ pub enum Request {
     OverviewState,
     /// Request information about screencasts.
     Casts,
+    /// Request the view state of every canvas-mode workspace (rice fork).
+    CanvasViews,
 }
 
 /// Reply from niri to client.
@@ -169,6 +171,8 @@ pub enum Response {
     OverviewState(Overview),
     /// Information about screencasts.
     Casts(Vec<Cast>),
+    /// View state of every canvas-mode workspace (rice fork).
+    CanvasViews(Vec<CanvasViewState>),
 }
 
 /// Overview information.
@@ -1114,6 +1118,36 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         id: Option<u64>,
     },
+    // rice: scratchpad (hidden workspace) actions.
+    /// Move a window to the first hidden workspace of its monitor (scratchpad).
+    ///
+    /// The workspace the window came from is remembered (see
+    /// [`Window::hidden_from_workspace_id`]).
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the focused window to the hidden (scratchpad) workspace")
+    )]
+    HideWindow {
+        /// Id of the window to hide.
+        ///
+        /// If `None`, uses the focused window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
+    /// Move a hidden window back to the workspace it was hidden from and focus it.
+    ///
+    /// If that workspace no longer exists, the window goes to the focused workspace.
+    #[cfg_attr(
+        feature = "clap",
+        clap(about = "Move the most recently hidden window back and focus it")
+    )]
+    UnhideWindow {
+        /// Id of the window to unhide.
+        ///
+        /// If `None`, uses the most recently hidden window.
+        #[cfg_attr(feature = "clap", arg(long))]
+        id: Option<u64>,
+    },
     // rice: named regions on the canvas plane of the focused workspace.
     /// Add a named region (dashed rectangle with a label) to the canvas plane of the focused
     /// workspace, or replace the region with this name.
@@ -1570,6 +1604,12 @@ pub struct Window {
     ///
     /// The timestamp comes from the monotonic clock.
     pub focus_timestamp: Option<Timestamp>,
+    /// Id of the workspace this window was hidden from (rice fork).
+    ///
+    /// Set while the window is on a hidden (scratchpad) workspace and the compositor knows where
+    /// it came from; `unhide-window` moves it back there.
+    #[serde(default)]
+    pub hidden_from_workspace_id: Option<u64>,
 }
 
 /// A moment in time.
@@ -1626,6 +1666,16 @@ pub struct WindowLayout {
     /// the distance from the corner of the black backdrop to the corner of the (centered) window
     /// contents.
     pub window_offset_in_tile: (f64, f64),
+    /// Position of the tile's top-left corner on the canvas plane (rice fork).
+    ///
+    /// Set for windows on the plane of a canvas-mode workspace; the size on the plane is
+    /// [`Self::tile_size`] (plane units are unscaled logical pixels). This does not change while
+    /// the canvas view pans or zooms.
+    #[serde(default)]
+    pub pos_in_canvas: Option<(f64, f64)>,
+    /// Whether this canvas window is pinned to the screen (rice fork).
+    #[serde(default)]
+    pub is_pinned: bool,
 }
 
 /// Output configuration change result.
@@ -1683,6 +1733,12 @@ pub struct Workspace {
     /// support still parse.
     #[serde(default)]
     pub mode: WorkspaceMode,
+    /// Whether this is a hidden (scratchpad) workspace (rice fork).
+    ///
+    /// Hidden workspaces never become active through navigation and are not shown in the
+    /// overview; their windows are the scratchpad.
+    #[serde(default)]
+    pub is_hidden: bool,
 }
 
 /// Configured keyboard layouts.
@@ -1973,6 +2029,68 @@ pub enum Event {
         /// disabled in hardware, or via `input { touchpad { off; } }`—this is not reflected here.
         on: bool,
     },
+    /// The window arrangement mode of a workspace changed (rice fork).
+    WorkspaceModeChanged {
+        /// Id of the workspace.
+        id: u64,
+        /// The new mode.
+        mode: WorkspaceMode,
+    },
+    /// The set of canvas-mode workspaces or their views changed (rice fork).
+    ///
+    /// This completely replaces the previous canvas view state. You will receive it when
+    /// connecting to the event stream, and whenever a workspace enters or leaves canvas mode or a
+    /// canvas workspace is added or removed.
+    CanvasViewsChanged {
+        /// View state of every canvas-mode workspace.
+        views: Vec<CanvasViewState>,
+    },
+    /// The view (pan/zoom) of a canvas workspace changed (rice fork).
+    ///
+    /// While the view animates this is sent at most once per frame of the workspace's output;
+    /// the last event of an animation has `animating: false`.
+    CanvasViewChanged {
+        /// The new view state.
+        view: CanvasViewState,
+    },
+    /// The set of strip-mode workspaces or their scroll positions changed (rice fork).
+    ///
+    /// This completely replaces the previous strip view state. You will receive it when
+    /// connecting to the event stream, and whenever the set of strip-mode workspaces changes.
+    StripViewsChanged {
+        /// Scroll state of every strip-mode workspace.
+        views: Vec<StripViewState>,
+    },
+    /// The scroll position (or column layout) of a strip-mode workspace changed (rice fork).
+    ///
+    /// While the view animates this is sent at most once per frame of the workspace's output;
+    /// the settled position is always sent. See [`StripViewState`] for the coordinates.
+    StripViewChanged {
+        /// Id of the workspace.
+        workspace_id: u64,
+        /// Strip x shown at the left edge of the workspace view right now.
+        view_offset: f64,
+        /// Strip x that the view will settle at.
+        target_view_offset: f64,
+        /// Width of the workspace working area.
+        working_area_width: f64,
+        /// Strip x of every column, in column order.
+        #[serde(default)]
+        column_xs: Vec<f64>,
+    },
+}
+
+impl StripViewState {
+    /// Converts this state into a [`Event::StripViewChanged`].
+    pub fn into_event(self) -> Event {
+        Event::StripViewChanged {
+            workspace_id: self.workspace_id,
+            view_offset: self.view_offset,
+            target_view_offset: self.target_view_offset,
+            working_area_width: self.working_area_width,
+            column_xs: self.column_xs,
+        }
+    }
 }
 
 impl From<Duration> for Timestamp {
@@ -2405,5 +2523,168 @@ mod tests {
         );
         assert!("-".parse::<PositionChange>().is_err());
         assert!("10% ".parse::<PositionChange>().is_err());
+    }
+
+    // rice: IPC additions must stay backwards compatible in both directions.
+
+    fn round_trip<T: Serialize + for<'de> Deserialize<'de>>(value: &T) -> T {
+        let json = serde_json::to_string(value).unwrap();
+        serde_json::from_str(&json).unwrap()
+    }
+
+    const OLD_WINDOW_LAYOUT: &str = r#"{
+        "pos_in_scrolling_layout": [1, 2],
+        "tile_size": [800.0, 600.0],
+        "window_size": [796, 596],
+        "tile_pos_in_workspace_view": [10.0, 20.0],
+        "window_offset_in_tile": [2.0, 2.0]
+    }"#;
+
+    fn old_window_json() -> String {
+        format!(
+            r#"{{"id": 7, "title": "t", "app_id": "a", "pid": 1, "workspace_id": 2,
+                "is_focused": false, "is_floating": true, "is_urgent": false,
+                "layout": {OLD_WINDOW_LAYOUT}, "focus_timestamp": null}}"#
+        )
+    }
+
+    const OLD_WORKSPACE: &str = r#"{"id": 2, "idx": 1, "name": "scratch", "output": "DP-1",
+        "is_urgent": false, "is_active": true, "is_focused": true, "active_window_id": null}"#;
+
+    #[test]
+    fn old_payloads_without_rice_fields_parse() {
+        let layout: WindowLayout = serde_json::from_str(OLD_WINDOW_LAYOUT).unwrap();
+        assert_eq!(layout.pos_in_canvas, None);
+        assert!(!layout.is_pinned);
+
+        let window: Window = serde_json::from_str(&old_window_json()).unwrap();
+        assert_eq!(window.hidden_from_workspace_id, None);
+        assert_eq!(window.layout, layout);
+
+        let ws: Workspace = serde_json::from_str(OLD_WORKSPACE).unwrap();
+        assert_eq!(ws.mode, WorkspaceMode::Strip);
+        assert!(!ws.is_hidden);
+
+        // Old events carrying these types parse too.
+        let event = format!(
+            r#"{{"WindowOpenedOrChanged":{{"window":{}}}}}"#,
+            old_window_json()
+        );
+        let event: Event = serde_json::from_str(&event).unwrap();
+        assert!(matches!(event, Event::WindowOpenedOrChanged { .. }));
+        let event = format!(r#"{{"WorkspacesChanged":{{"workspaces":[{OLD_WORKSPACE}]}}}}"#);
+        let event: Event = serde_json::from_str(&event).unwrap();
+        assert!(matches!(event, Event::WorkspacesChanged { .. }));
+    }
+
+    #[test]
+    fn new_fields_round_trip() {
+        let mut window: Window = serde_json::from_str(&old_window_json()).unwrap();
+        window.hidden_from_workspace_id = Some(4);
+        window.layout.pos_in_canvas = Some((-300.5, 12.));
+        window.layout.is_pinned = true;
+        let back = round_trip(&window);
+        assert_eq!(back.hidden_from_workspace_id, Some(4));
+        assert_eq!(back.layout, window.layout);
+
+        let mut ws: Workspace = serde_json::from_str(OLD_WORKSPACE).unwrap();
+        ws.mode = WorkspaceMode::Canvas;
+        ws.is_hidden = true;
+        assert_eq!(round_trip(&ws), ws);
+    }
+
+    #[test]
+    fn new_requests_responses_and_actions_round_trip() {
+        let json = serde_json::to_string(&Request::CanvasViews).unwrap();
+        assert_eq!(json, r#""CanvasViews""#);
+        assert!(matches!(
+            round_trip(&Request::CanvasViews),
+            Request::CanvasViews
+        ));
+
+        let view = CanvasViewState {
+            workspace_id: 1,
+            offset: (1., 2.),
+            zoom: 0.5,
+            target_offset: (3., 4.),
+            target_zoom: 0.62,
+            view_size: (1280., 720.),
+            animating: false,
+            regions: Vec::new(),
+        };
+        let reply: Reply = Ok(Response::CanvasViews(vec![view.clone()]));
+        let back = round_trip(&reply);
+        assert!(matches!(back, Ok(Response::CanvasViews(views)) if views == vec![view]));
+
+        for action in [
+            Action::HideWindow { id: None },
+            Action::HideWindow { id: Some(5) },
+            Action::UnhideWindow { id: None },
+            Action::UnhideWindow { id: Some(5) },
+        ] {
+            let json = serde_json::to_string(&action).unwrap();
+            let back: Action = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{back:?}"), format!("{action:?}"));
+        }
+        assert_eq!(
+            serde_json::to_string(&Action::HideWindow { id: Some(5) }).unwrap(),
+            r#"{"HideWindow":{"id":5}}"#
+        );
+    }
+
+    #[test]
+    fn new_events_round_trip() {
+        let canvas = CanvasViewState {
+            workspace_id: 9,
+            offset: (0., 0.),
+            zoom: 1.,
+            target_offset: (100., 0.),
+            target_zoom: 1.,
+            view_size: (1920., 1080.),
+            animating: true,
+            regions: Vec::new(),
+        };
+        let strip = StripViewState {
+            workspace_id: 2,
+            view_offset: 10.,
+            target_view_offset: 20.,
+            working_area_width: 1900.,
+            column_xs: vec![0., 500.],
+        };
+        let events = [
+            Event::WorkspaceModeChanged {
+                id: 9,
+                mode: WorkspaceMode::Canvas,
+            },
+            Event::CanvasViewsChanged {
+                views: vec![canvas.clone()],
+            },
+            Event::CanvasViewChanged { view: canvas },
+            Event::StripViewsChanged {
+                views: vec![strip.clone()],
+            },
+            strip.into_event(),
+        ];
+        for event in events {
+            let json = serde_json::to_string(&event).unwrap();
+            let back: Event = serde_json::from_str(&json).unwrap();
+            assert_eq!(format!("{back:?}"), format!("{event:?}"));
+        }
+
+        assert_eq!(
+            serde_json::to_string(&Event::WorkspaceModeChanged {
+                id: 3,
+                mode: WorkspaceMode::Canvas
+            })
+            .unwrap(),
+            r#"{"WorkspaceModeChanged":{"id":3,"mode":"Canvas"}}"#
+        );
+
+        // `column_xs` may be absent.
+        let event: Event = serde_json::from_str(
+            r#"{"StripViewChanged":{"workspace_id":1,"view_offset":0.0,"target_view_offset":5.0,"working_area_width":100.0}}"#,
+        )
+        .unwrap();
+        assert!(matches!(event, Event::StripViewChanged { column_xs, .. } if column_xs.is_empty()));
     }
 }

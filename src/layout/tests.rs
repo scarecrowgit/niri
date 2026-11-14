@@ -18,6 +18,7 @@ mod animations;
 mod canvas; // rice
 mod decorations; // rice
 mod fullscreen;
+mod scratch; // rice
 
 impl<W: LayoutElement> Default for Layout<W> {
     fn default() -> Self {
@@ -806,8 +807,35 @@ enum Op {
         #[proptest(strategy = "proptest::option::of(1..=5usize)")]
         id: Option<usize>,
     },
+    // rice: hidden (scratchpad) workspaces (nested to keep the Op strategy small).
+    Scratch(ScratchOp),
     // rice: canvas pointer and gesture input (nested to keep the Op strategy small).
     CanvasInput(CanvasInputOp),
+}
+
+/// rice: hidden (scratchpad) workspace operations.
+#[derive(Debug, Clone, Arbitrary)]
+enum ScratchOp {
+    AddHiddenWorkspace {
+        #[proptest(strategy = "1..=5usize")]
+        ws_name: usize,
+        #[proptest(strategy = "proptest::collection::vec(1..=5usize, 0..=3)")]
+        output_names: Vec<usize>,
+    },
+    /// Sets the `hidden` flag of a named workspace like a config reload does.
+    SetWorkspaceHidden {
+        #[proptest(strategy = "1..=5usize")]
+        ws_name: usize,
+        hidden: bool,
+    },
+    HideWindow {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
+    UnhideWindow {
+        #[proptest(strategy = "proptest::option::of(1..=5usize)")]
+        id: Option<usize>,
+    },
 }
 
 /// rice: canvas pointer and gesture input operations.
@@ -841,6 +869,47 @@ enum CanvasInputOp {
         #[proptest(strategy = "proptest::option::of(arbitrary_canvas_anchor())")]
         anchor: Option<(f64, f64)>,
     },
+}
+
+impl ScratchOp {
+    fn apply(self, layout: &mut Layout<TestWindow>) {
+        match self {
+            ScratchOp::AddHiddenWorkspace {
+                ws_name,
+                output_names,
+            } => {
+                layout.ensure_named_workspace(&WorkspaceConfig {
+                    name: WorkspaceName(format!("ws{ws_name}")),
+                    open_on_output: output_names
+                        .into_iter()
+                        .map(|name| format!("output{name}"))
+                        .collect(),
+                    layout: None,
+                    hidden: true,
+                });
+            }
+            ScratchOp::SetWorkspaceHidden { ws_name, hidden } => {
+                let ws_name = format!("ws{ws_name}");
+                let Some(ws) = layout
+                    .workspaces_mut()
+                    .find(|ws| ws.name() == Some(&ws_name))
+                else {
+                    return;
+                };
+                ws.set_hidden(hidden);
+                // Config reloads update the options right after the workspace flags.
+                layout.update_options(Options::clone(&layout.options));
+            }
+            ScratchOp::HideWindow { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.hide_window(id.as_ref());
+            }
+            ScratchOp::UnhideWindow { id } => {
+                let id = id.filter(|id| layout.has_window(id));
+                layout.unhide_window(id.as_ref());
+            }
+        }
+    }
 }
 
 impl CanvasInputOp {
@@ -994,6 +1063,7 @@ impl Op {
                         .map(|name| format!("output{name}"))
                         .collect(),
                     layout: layout_config.map(|x| niri_config::WorkspaceLayoutPart(*x)),
+                    hidden: false, // rice
                 });
             }
             Op::UnnameWorkspace { ws_name } => {
@@ -1786,6 +1856,7 @@ impl Op {
                 let id = id.filter(|id| layout.has_window(id));
                 layout.toggle_window_pinned(id.as_ref());
             }
+            Op::Scratch(op) => op.apply(layout), // rice
             Op::CanvasInput(op) => op.apply(layout),
         }
     }
@@ -2031,6 +2102,13 @@ fn operations_dont_panic() {
         Op::ToggleWorkspaceMode,
         Op::CanvasZoomOut { anchor: None },
         Op::CanvasFit,
+        // rice: hidden (scratchpad) workspaces.
+        Op::Scratch(ScratchOp::AddHiddenWorkspace {
+            ws_name: 4,
+            output_names: vec![],
+        }),
+        Op::Scratch(ScratchOp::HideWindow { id: None }),
+        Op::Scratch(ScratchOp::UnhideWindow { id: None }),
     ];
 
     for third in &every_op {
@@ -2214,6 +2292,13 @@ fn operations_from_starting_state_dont_panic() {
         Op::ToggleWorkspaceMode,
         Op::CanvasZoomOut { anchor: None },
         Op::CanvasFit,
+        // rice: hidden (scratchpad) workspaces.
+        Op::Scratch(ScratchOp::AddHiddenWorkspace {
+            ws_name: 4,
+            output_names: vec![],
+        }),
+        Op::Scratch(ScratchOp::HideWindow { id: None }),
+        Op::Scratch(ScratchOp::UnhideWindow { id: None }),
     ];
 
     for third in &every_op {

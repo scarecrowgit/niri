@@ -83,6 +83,9 @@ pub struct Tile<W: LayoutElement> {
     /// workspace it is on (e.g. after fullscreen). Cleared when the tile leaves its workspace.
     pub(super) canvas_plane_pos: Option<Point<f64, Logical>>,
 
+    /// rice: where the tile was before it went to a hidden (scratchpad) workspace.
+    pub(super) scratch_origin: Option<super::scratch::ScratchOrigin>,
+
     /// Currently selected preset width index when this tile is floating.
     pub(super) floating_preset_width_idx: Option<usize>,
 
@@ -223,6 +226,7 @@ impl<W: LayoutElement> Tile<W> {
             floating_window_size: None,
             floating_pos: None,
             canvas_plane_pos: None,
+            scratch_origin: None, // rice
             floating_preset_width_idx: None,
             floating_preset_height_idx: None,
             open_animation: None,
@@ -1030,6 +1034,9 @@ impl<W: LayoutElement> Tile<W> {
             window_size: self.window().size().into(),
             tile_pos_in_workspace_view: None,
             window_offset_in_tile: self.window_loc().into(),
+            // rice: set by canvas workspaces.
+            pos_in_canvas: None,
+            is_pinned: false,
         }
     }
 

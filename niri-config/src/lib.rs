@@ -2995,6 +2995,7 @@ mod tests {
                         "DP-1",
                     ],
                     layout: None,
+                    hidden: false,
                 },
                 Workspace {
                     name: WorkspaceName(
@@ -3002,6 +3003,7 @@ mod tests {
                     ),
                     open_on_output: [],
                     layout: None,
+                    hidden: false,
                 },
                 Workspace {
                     name: WorkspaceName(
@@ -3009,6 +3011,7 @@ mod tests {
                     ),
                     open_on_output: [],
                     layout: None,
+                    hidden: false,
                 },
             ],
             recent_windows: RecentWindows {

@@ -33,16 +33,6 @@ use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::RenderCtx;
 use crate::utils::transaction::Transaction;
-
-/// Scales the view position of a canvas tile's IPC layout by the canvas zoom.
-pub(super) fn scale_ipc_layout(mut layout: WindowLayout, zoom: f64) -> WindowLayout {
-    if zoom != 1. {
-        if let Some((x, y)) = layout.tile_pos_in_workspace_view {
-            layout.tile_pos_in_workspace_view = Some((x * zoom, y * zoom));
-        }
-    }
-    layout
-}
 use crate::utils::ResizeEdge;
 
 impl<W: LayoutElement> Workspace<W> {
@@ -107,6 +97,42 @@ impl<W: LayoutElement> Workspace<W> {
     /// Whether a window on this canvas workspace is pinned.
     pub fn is_window_pinned(&self, id: &W::Id) -> bool {
         self.is_canvas() && self.floating.is_pinned(id)
+    }
+
+    /// IPC layouts of the floating tiles. On a canvas: `pos_in_canvas`, `is_pinned`, and
+    /// `tile_pos_in_workspace_view` in real view coordinates at the *settled* (target) view,
+    /// unset for tiles outside it, so that view animations don't spam layout changes (like the
+    /// stationary view offset of the scrolling layout).
+    pub(super) fn canvas_floating_ipc_layouts(
+        &self,
+    ) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> + '_ {
+        let target = self.canvas_target_transform();
+        let scale = self.scale.fractional_scale();
+        let view = Rectangle::from_size(self.view_size);
+        let positions = self.floating.canvas_stored_positions();
+        self.floating.tiles_with_ipc_layouts().zip(positions).map(
+            move |((tile, mut layout), (pinned, stored))| {
+                let Some(target) = target else {
+                    return (tile, layout);
+                };
+                // Pinned tiles store unscaled view positions, the others plane positions.
+                let (plane, view_pos) = if pinned {
+                    (
+                        target.unscaled_to_plane(stored),
+                        stored.upscale(target.zoom),
+                    )
+                } else {
+                    (stored, target.plane_to_view(stored))
+                };
+                let view_pos = view_pos.to_physical_precise_round(scale).to_logical(scale);
+                let size = Size::from(layout.tile_size).upscale(target.zoom);
+                let on_screen = Rectangle::new(view_pos, size).overlaps(view);
+                layout.tile_pos_in_workspace_view = on_screen.then_some(view_pos.into());
+                layout.pos_in_canvas = Some(plane.into());
+                layout.is_pinned = pinned;
+                (tile, layout)
+            },
+        )
     }
 
     // ---------------------------------------------------------------------------------------

@@ -154,6 +154,14 @@ impl<W: LayoutElement> ScrollingSpace<W> {
     }
 
     /// Number of columns.
+    /// rice IPC: strip x of every column (x = 0 at the first column, gaps included), in order.
+    pub fn ipc_column_xs(&self) -> Vec<f64> {
+        let mut xs: Vec<f64> = self.column_xs(self.data.iter().copied()).collect();
+        // Drop the one-past-last entry.
+        xs.pop();
+        xs
+    }
+
     pub(in crate::layout) fn column_count(&self) -> usize {
         self.columns.len()
     }

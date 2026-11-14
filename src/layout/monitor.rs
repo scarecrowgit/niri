@@ -328,7 +328,7 @@ impl<W: LayoutElement> Monitor<W> {
         let ws = Workspace::new(output.clone(), clock.clone(), options.clone());
         workspaces.push(ws);
 
-        Self {
+        let mut monitor = Self {
             output_name: output.name(),
             output,
             scale,
@@ -347,7 +347,10 @@ impl<W: LayoutElement> Monitor<W> {
             base_options,
             options,
             layout_config,
-        }
+        };
+        // rice: a hidden workspace is never the active one.
+        monitor.ensure_active_visible();
+        monitor
     }
 
     pub fn into_workspaces(mut self) -> Vec<Workspace<W>> {
@@ -424,8 +427,10 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx += 1;
         }
 
+        // rice: workspace switches run in visual indices (hidden workspaces don't count).
+        let visual_idx = self.visual_idx(idx);
         if let Some(switch) = &mut self.workspace_switch {
-            if idx as f64 <= switch.target_idx() {
+            if visual_idx as f64 <= switch.target_idx() {
                 switch.offset(1);
             }
         }
@@ -448,6 +453,13 @@ impl<W: LayoutElement> Monitor<W> {
         idx: usize,
         config: Option<niri_config::Animation>,
     ) {
+        // rice: hidden workspaces never become active.
+        if self.is_hidden_idx(idx) {
+            return;
+        }
+        // rice: the switch animates between visual indices.
+        let visual_idx = self.visual_idx(idx);
+
         // FIXME: also compute and use current velocity.
         let current_idx = self.workspace_render_idx();
 
@@ -463,13 +475,13 @@ impl<W: LayoutElement> Monitor<W> {
         match &mut self.workspace_switch {
             // During a DnD scroll, we want to visually animate even if idx matches the active idx.
             Some(WorkspaceSwitch::Gesture(gesture)) if gesture.dnd_last_event_time.is_some() => {
-                gesture.center_idx = idx;
+                gesture.center_idx = visual_idx;
 
                 // Adjust start_idx to make current_idx point at idx.
                 let current_pos = gesture.current_idx - gesture.start_idx;
-                gesture.start_idx = idx as f64 - current_pos;
+                gesture.start_idx = visual_idx as f64 - current_pos;
                 let prev_current_idx = gesture.current_idx;
-                gesture.current_idx = idx as f64;
+                gesture.current_idx = visual_idx as f64;
 
                 let current_idx_delta = gesture.current_idx - prev_current_idx;
                 gesture.animate_from(-current_idx_delta, self.clock.clone(), config);
@@ -483,7 +495,7 @@ impl<W: LayoutElement> Monitor<W> {
                 self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
                     self.clock.clone(),
                     current_idx,
-                    idx as f64,
+                    visual_idx as f64,
                     0.,
                     config,
                 )));
@@ -685,6 +697,8 @@ impl<W: LayoutElement> Monitor<W> {
         let ws = &mut self.workspaces[idx];
 
         ws.unname();
+        // rice: an unnamed workspace is no longer hidden.
+        self.drop_stale_workspace_switch();
 
         if self.workspace_switch.is_none() {
             self.clean_up_workspaces();
@@ -714,6 +728,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
 
         ws
     }
@@ -745,6 +760,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.workspace_switch = None;
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
     }
 
     pub fn append_workspaces(&mut self, mut workspaces: Vec<Workspace<W>>) {
@@ -782,6 +798,7 @@ impl<W: LayoutElement> Monitor<W> {
         // (outside the workspace switch), we don't need to cancel it.
         self.workspace_switch = None;
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
     }
 
     pub fn move_down_or_to_workspace_down(&mut self) {
@@ -809,12 +826,14 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_to_workspace_up(&mut self, activate: ActivateWindow) {
-        let new_idx = self.active_workspace_idx.saturating_sub(1);
+        // rice: skip hidden workspaces.
+        let new_idx = self.visible_idx_up(self.active_workspace_idx);
         self.move_to_workspace(None, new_idx, activate);
     }
 
     pub fn move_to_workspace_down(&mut self, activate: ActivateWindow) {
-        let new_idx = min(self.active_workspace_idx + 1, self.workspaces.len() - 1);
+        // rice: skip hidden workspaces.
+        let new_idx = self.visible_idx_down(self.active_workspace_idx);
         self.move_to_workspace(None, new_idx, activate);
     }
 
@@ -833,6 +852,8 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx
         };
         let source_id = self.workspaces[source_workspace_idx].id();
+        // rice: windows leaving a hidden workspace just appear (it is not on screen).
+        let from_hidden = self.workspaces[source_workspace_idx].is_hidden();
 
         let new_idx = min(idx, self.workspaces.len() - 1);
         if new_idx == source_workspace_idx {
@@ -895,8 +916,14 @@ impl<W: LayoutElement> Monitor<W> {
         // source workspace itself was removed, don't bother animating this since the removal is
         // instant anyway.
         if let Some(source_workspace_idx) = self.idx_of_ws(source_id) {
+            // rice: in visual indices, so that hidden workspaces in between don't count.
+            let source_visual_idx = self.visual_idx(source_workspace_idx) as f64;
+            let new_visual_idx = self.visual_idx(new_idx) as f64;
             old_render_pos.y +=
-                self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
+                self.workspace_size_with_gap(1.).h * (source_visual_idx - new_visual_idx);
+        }
+        if from_hidden {
+            return;
         }
 
         let (tile, new_render_pos) = self.workspaces[new_idx]
@@ -908,12 +935,14 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_column_to_workspace_up(&mut self, activate: bool) {
-        let new_idx = self.active_workspace_idx.saturating_sub(1);
+        // rice: skip hidden workspaces.
+        let new_idx = self.visible_idx_up(self.active_workspace_idx);
         self.move_column_to_workspace(new_idx, activate);
     }
 
     pub fn move_column_to_workspace_down(&mut self, activate: bool) {
-        let new_idx = min(self.active_workspace_idx + 1, self.workspaces.len() - 1);
+        // rice: skip hidden workspaces.
+        let new_idx = self.visible_idx_down(self.active_workspace_idx);
         self.move_column_to_workspace(new_idx, activate);
     }
 
@@ -948,8 +977,11 @@ impl<W: LayoutElement> Monitor<W> {
         let column = workspace.remove_active_column().unwrap();
 
         // Animate vertical movement between workspaces.
+        // rice: in visual indices, so that hidden workspaces in between don't count.
+        let source_visual_idx = self.visual_idx(source_workspace_idx) as f64;
+        let new_visual_idx = self.visual_idx(new_idx) as f64;
         old_render_pos.y +=
-            self.workspace_size_with_gap(1.).h * (source_workspace_idx as f64 - new_idx as f64);
+            self.workspace_size_with_gap(1.).h * (source_visual_idx - new_visual_idx);
 
         // If the view is following the column, match the animation.
         let config = if activate {
@@ -975,28 +1007,32 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn switch_workspace_up(&mut self) {
+        // rice: gesture indices are visual, hidden workspaces are skipped.
         let new_idx = match &self.workspace_switch {
             // During a DnD scroll, select the prev apparent workspace.
             Some(WorkspaceSwitch::Gesture(gesture)) if gesture.dnd_last_event_time.is_some() => {
                 let current = gesture.current_idx;
                 let new = current.ceil() - 1.;
-                new.clamp(0., (self.workspaces.len() - 1) as f64) as usize
+                let new = new.clamp(0., (self.visible_workspace_count() - 1) as f64) as usize;
+                self.idx_of_visual(new)
             }
-            _ => self.active_workspace_idx.saturating_sub(1),
+            _ => self.visible_idx_up(self.active_workspace_idx),
         };
 
         self.activate_workspace(new_idx);
     }
 
     pub fn switch_workspace_down(&mut self) {
+        // rice: gesture indices are visual, hidden workspaces are skipped.
         let new_idx = match &self.workspace_switch {
             // During a DnD scroll, select the next apparent workspace.
             Some(WorkspaceSwitch::Gesture(gesture)) if gesture.dnd_last_event_time.is_some() => {
                 let current = gesture.current_idx;
                 let new = current.floor() + 1.;
-                new.clamp(0., (self.workspaces.len() - 1) as f64) as usize
+                let new = new.clamp(0., (self.visible_workspace_count() - 1) as f64) as usize;
+                self.idx_of_visual(new)
             }
-            _ => min(self.active_workspace_idx + 1, self.workspaces.len() - 1),
+            _ => self.visible_idx_down(self.active_workspace_idx),
         };
 
         self.activate_workspace(new_idx);
@@ -1212,6 +1248,10 @@ impl<W: LayoutElement> Monitor<W> {
 
         self.base_options = base_options;
         self.options = options;
+
+        // rice: a workspace may have become hidden or visible.
+        self.ensure_active_visible();
+        self.drop_stale_workspace_switch();
     }
 
     pub fn update_layout_config(&mut self, layout_config: Option<niri_config::LayoutPart>) -> bool {
@@ -1244,7 +1284,8 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn move_workspace_down(&mut self) {
-        let mut new_idx = min(self.active_workspace_idx + 1, self.workspaces.len() - 1);
+        // rice: swap with the next visible workspace.
+        let mut new_idx = self.visible_idx_down(self.active_workspace_idx);
         if new_idx == self.active_workspace_idx {
             return;
         }
@@ -1267,10 +1308,12 @@ impl<W: LayoutElement> Monitor<W> {
         self.previous_workspace_id = previous_workspace_id;
 
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
     }
 
     pub fn move_workspace_up(&mut self) {
-        let mut new_idx = self.active_workspace_idx.saturating_sub(1);
+        // rice: swap with the previous visible workspace.
+        let mut new_idx = self.visible_idx_up(self.active_workspace_idx);
         if new_idx == self.active_workspace_idx {
             return;
         }
@@ -1293,6 +1336,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.previous_workspace_id = previous_workspace_id;
 
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
     }
 
     pub fn move_workspace_to_idx(&mut self, old_idx: usize, new_idx: usize) {
@@ -1344,6 +1388,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch = None;
 
         self.clean_up_workspaces();
+        self.ensure_active_visible(); // rice
     }
 
     /// Returns the geometry of the active window relative to and clamped to the output.
@@ -1471,7 +1516,8 @@ impl<W: LayoutElement> Monitor<W> {
         if let Some(switch) = &self.workspace_switch {
             switch.current_idx()
         } else {
-            self.active_workspace_idx as f64
+            // rice: visual index (hidden workspaces don't take up space).
+            self.visual_idx(self.active_workspace_idx) as f64
         }
     }
 
@@ -1491,9 +1537,23 @@ impl<W: LayoutElement> Monitor<W> {
         let first_ws_y = -self.workspace_render_idx() * ws_height_with_gap;
         let first_ws_y = round_logical_in_physical(scale, first_ws_y);
 
+        // rice: hidden workspaces take up no space; they get the geometry of the next visible
+        // workspace and are filtered out of the render/hit-test iterators below.
+        let hidden: Vec<bool> = if self.workspaces.iter().any(|ws| ws.is_hidden()) {
+            self.workspaces.iter().map(|ws| ws.is_hidden()).collect()
+        } else {
+            Vec::new()
+        };
+        let mut visual_idx = 0;
+
         // Return position for one-past-last workspace too.
         (0..=self.workspaces.len()).map(move |idx| {
-            let y = first_ws_y + idx as f64 * ws_height_with_gap;
+            let vis = visual_idx;
+            if !hidden.get(idx).copied().unwrap_or(false) {
+                visual_idx += 1;
+            }
+
+            let y = first_ws_y + vis as f64 * ws_height_with_gap;
             let loc = Point::from((0., y)) + static_offset;
 
             // Even though all components that go into loc are rounded to physical pixels, the
@@ -1514,6 +1574,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter(), geo)
+            // rice: hidden workspaces are never shown.
+            .filter(|(ws, _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
     }
@@ -1531,6 +1593,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter().enumerate(), geo)
+            // rice: hidden workspaces are never shown.
+            .filter(|((_, ws), _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| geo.intersection(output_geo).is_some())
     }
@@ -1543,6 +1607,8 @@ impl<W: LayoutElement> Monitor<W> {
 
         let geo = self.workspaces_render_geo();
         zip(self.workspaces.iter_mut(), geo)
+            // rice: hidden workspaces are never shown.
+            .filter(|(ws, _geo)| !ws.is_hidden())
             // Cull out workspaces outside the output.
             .filter(move |(_ws, geo)| !cull || geo.intersection(output_geo).is_some())
     }
@@ -1851,7 +1917,8 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn workspace_switch_gesture_begin(&mut self, is_touchpad: bool) {
-        let center_idx = self.active_workspace_idx;
+        // rice: gesture indices are visual.
+        let center_idx = self.visual_idx(self.active_workspace_idx);
         let current_idx = self.workspace_render_idx();
 
         let gesture = WorkspaceSwitchGesture {
@@ -1883,7 +1950,8 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
-        let center_idx = self.active_workspace_idx;
+        // rice: gesture indices are visual.
+        let center_idx = self.visual_idx(self.active_workspace_idx);
         let current_idx = self.workspace_render_idx();
 
         let gesture = WorkspaceSwitchGesture {
@@ -1920,6 +1988,8 @@ impl<W: LayoutElement> Monitor<W> {
         } else {
             self.workspace_size_with_gap(1.).h
         };
+        // rice: gesture bounds count visible workspaces only.
+        let workspace_count = self.visible_workspace_count();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
             return None;
@@ -1940,7 +2010,7 @@ impl<W: LayoutElement> Monitor<W> {
 
         let pos = gesture.tracker.pos() / total_height;
 
-        let (min, max) = gesture.min_max(self.workspaces.len());
+        let (min, max) = gesture.min_max(workspace_count);
         let new_idx = gesture.start_idx + pos;
         let new_idx = rubber_band.clamp(min, max, new_idx);
 
@@ -1954,6 +2024,8 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn dnd_scroll_gesture_scroll(&mut self, pos: Point<f64, Logical>, speed: f64) -> bool {
         let zoom = self.overview_zoom();
+        // rice: gesture bounds count visible workspaces only.
+        let workspace_count = self.visible_workspace_count();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
             return false;
@@ -2027,7 +2099,7 @@ impl<W: LayoutElement> Monitor<W> {
         let pos = gesture.tracker.pos() / total_height;
         let unclamped = gesture.start_idx + pos;
 
-        let (min, max) = gesture.min_max(self.workspaces.len());
+        let (min, max) = gesture.min_max(workspace_count);
         let clamped = unclamped.clamp(min, max);
 
         // Make sure that DnD scrolling too much outside the min/max does not "build up".
@@ -2054,6 +2126,8 @@ impl<W: LayoutElement> Monitor<W> {
         } else {
             self.workspace_size_with_gap(1.).h
         };
+        // rice: gesture indices are visual; map the result back to a real index.
+        let visible = self.visible_workspace_indices();
 
         let Some(WorkspaceSwitch::Gesture(gesture)) = &mut self.workspace_switch else {
             return false;
@@ -2070,11 +2144,12 @@ impl<W: LayoutElement> Monitor<W> {
         let current_pos = gesture.tracker.pos() / total_height;
         let pos = gesture.tracker.projected_end_pos() / total_height;
 
-        let (min, max) = gesture.min_max(self.workspaces.len());
+        let (min, max) = gesture.min_max(visible.len());
         let new_idx = gesture.start_idx + pos;
 
         let new_idx = new_idx.clamp(min, max);
-        let new_idx = new_idx.round() as usize;
+        let new_visual_idx = new_idx.round() as usize;
+        let new_idx = visible[new_visual_idx.min(visible.len() - 1)];
 
         velocity *= rubber_band.clamp_derivative(min, max, gesture.start_idx + current_pos);
 
@@ -2086,7 +2161,7 @@ impl<W: LayoutElement> Monitor<W> {
         self.workspace_switch = Some(WorkspaceSwitch::Animation(Animation::new(
             self.clock.clone(),
             gesture.current_idx,
-            new_idx as f64,
+            new_visual_idx as f64,
             velocity,
             self.options.animations.workspace_switch.0,
         )));
@@ -2107,6 +2182,95 @@ impl<W: LayoutElement> Monitor<W> {
         };
 
         self.workspace_switch_gesture_end(None);
+    }
+
+    // rice: hidden (scratchpad) workspaces. They keep their real index (IPC, `focus-workspace N`,
+    // `move-window-to-workspace N`), but are skipped by up/down navigation, never become active,
+    // and take up no space on screen: workspace switch animations and gestures run in *visual*
+    // indices that count only the visible workspaces. Without hidden workspaces, visual and real
+    // indices are the same.
+
+    /// Whether the workspace at `idx` is hidden.
+    pub fn is_hidden_idx(&self, idx: usize) -> bool {
+        self.workspaces.get(idx).is_some_and(|ws| ws.is_hidden())
+    }
+
+    /// Visual index of the workspace at real index `idx`: the number of visible workspaces
+    /// before it.
+    pub fn visual_idx(&self, idx: usize) -> usize {
+        let idx = idx.min(self.workspaces.len());
+        self.workspaces[..idx]
+            .iter()
+            .filter(|ws| !ws.is_hidden())
+            .count()
+    }
+
+    /// Number of visible workspaces (at least one: the last workspace is never hidden).
+    pub fn visible_workspace_count(&self) -> usize {
+        self.workspaces.iter().filter(|ws| !ws.is_hidden()).count()
+    }
+
+    /// Real indices of the visible workspaces, in order.
+    fn visible_workspace_indices(&self) -> Vec<usize> {
+        let iter = self.workspaces.iter().enumerate();
+        iter.filter(|(_, ws)| !ws.is_hidden())
+            .map(|(idx, _)| idx)
+            .collect()
+    }
+
+    /// Real index of the visible workspace with visual index `visual_idx` (clamped).
+    fn idx_of_visual(&self, visual_idx: usize) -> usize {
+        let visible = self.visible_workspace_indices();
+        visible[visual_idx.min(visible.len() - 1)]
+    }
+
+    /// Nearest visible workspace above `idx`, or `idx` itself if there is none.
+    fn visible_idx_up(&self, idx: usize) -> usize {
+        (0..idx)
+            .rev()
+            .find(|&i| !self.is_hidden_idx(i))
+            .unwrap_or(idx)
+    }
+
+    /// Nearest visible workspace below `idx`, or `idx` itself if there is none.
+    fn visible_idx_down(&self, idx: usize) -> usize {
+        (idx + 1..self.workspaces.len())
+            .find(|&i| !self.is_hidden_idx(i))
+            .unwrap_or(idx)
+    }
+
+    /// Moves the active workspace off a hidden workspace (to the nearest visible one above, or
+    /// below), e.g. after a workspace became hidden through a config change.
+    pub(super) fn ensure_active_visible(&mut self) {
+        let idx = self.active_workspace_idx;
+        if !self.is_hidden_idx(idx) {
+            return;
+        }
+
+        let new_idx = (0..idx)
+            .rev()
+            .chain(idx + 1..self.workspaces.len())
+            .find(|&i| !self.is_hidden_idx(i))
+            .expect("the last workspace is never hidden");
+        self.active_workspace_idx = new_idx;
+        self.workspace_switch = None;
+    }
+
+    /// Stops a workspace switch animation whose target no longer matches the visual index of the
+    /// active workspace, after a workspace became hidden or visible.
+    fn drop_stale_workspace_switch(&mut self) {
+        let visual_idx = self.visual_idx(self.active_workspace_idx) as f64;
+        if let Some(WorkspaceSwitch::Animation(anim)) = &self.workspace_switch {
+            if anim.to() != visual_idx {
+                self.workspace_switch = None;
+                self.clean_up_workspaces();
+            }
+        }
+    }
+
+    /// Index of the first hidden workspace on this monitor.
+    pub fn first_hidden_workspace_idx(&self) -> Option<usize> {
+        self.workspaces.iter().position(|ws| ws.is_hidden())
     }
 
     pub fn scale(&self) -> smithay::output::Scale {
@@ -2138,13 +2302,29 @@ impl<W: LayoutElement> Monitor<W> {
             "monitor must have at least one workspace"
         );
         assert!(self.active_workspace_idx < self.workspaces.len());
+        // rice: hidden workspaces.
+        assert!(
+            !self.workspaces[self.active_workspace_idx].is_hidden(),
+            "a hidden workspace can't be active"
+        );
+        assert!(
+            !self.workspaces.last().unwrap().is_hidden(),
+            "the last workspace can't be hidden"
+        );
 
         if let Some(WorkspaceSwitch::Animation(anim)) = &self.workspace_switch {
             let before_idx = anim.from() as usize;
             let after_idx = anim.to() as usize;
 
-            assert!(before_idx < self.workspaces.len());
-            assert!(after_idx < self.workspaces.len());
+            // rice: switch animations run in visual indices.
+            let visible = self.visible_workspace_count();
+            assert!(before_idx < visible);
+            assert!(after_idx < visible);
+            assert_eq!(
+                after_idx,
+                self.visual_idx(self.active_workspace_idx),
+                "workspace switch must end at the active workspace"
+            );
         }
 
         assert!(

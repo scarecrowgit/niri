@@ -48,6 +48,8 @@ use crate::window::ResolvedWindowRules;
 
 // rice: infinite canvas mode (new `impl Workspace` methods live there).
 mod canvas_ext;
+// rice: hidden (scratchpad) workspaces.
+mod scratch_ext;
 // rice: canvas plane grid and regions.
 mod canvas_decor;
 
@@ -123,6 +125,9 @@ pub struct Workspace<W: LayoutElement> {
 
     /// rice: strip/canvas mode and canvas view state.
     canvas: WorkspaceCanvas<W::Id>,
+
+    /// rice: hidden (scratchpad) workspace, from the config entry.
+    hidden: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -288,6 +293,7 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
+            hidden: config.as_ref().is_some_and(|c| c.hidden), // rice
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
@@ -354,6 +360,7 @@ impl<W: LayoutElement> Workspace<W> {
             clock,
             base_options,
             options,
+            hidden: config.as_ref().is_some_and(|c| c.hidden), // rice
             name: config.map(|c| c.name.0),
             layout_config,
             id: WorkspaceId::next(),
@@ -378,6 +385,7 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn unname(&mut self) {
         self.name = None;
+        self.hidden = false; // rice: hidden comes with the name's config entry
     }
 
     pub fn has_windows_or_name(&self) -> bool {
@@ -681,8 +689,13 @@ impl<W: LayoutElement> Workspace<W> {
         is_floating: bool,
         anim: Option<niri_config::Animation>,
     ) {
-        // rice: canvas workspaces put normal windows on the plane.
+        // rice: canvas workspaces put normal windows on the plane; windows coming back from the
+        // scratchpad return to their plane position.
+        let scratch_plane_pos = self.scratch_on_tile_added(&mut tile);
         let (target, is_floating) = self.canvas_adjust_add_target(&mut tile, target, is_floating);
+        if scratch_plane_pos.is_some() {
+            tile.canvas_plane_pos = scratch_plane_pos;
+        }
 
         self.enter_output_for_window(tile.window());
         tile.restore_to_floating = is_floating;
@@ -798,10 +811,12 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn add_column(
         &mut self,
-        column: Column<W>,
+        mut column: Column<W>,
         activate: bool,
         anim: Option<niri_config::Animation>,
     ) {
+        // rice: track where windows on hidden workspaces come from.
+        self.scratch_on_column_added(&mut column);
         // rice: columns moved onto a canvas workspace spill onto the plane.
         if self.is_canvas() {
             return self.canvas_add_tiles(column.into_tiles(), activate, anim);
@@ -848,6 +863,7 @@ impl<W: LayoutElement> Workspace<W> {
 
         // rice: plane positions are meaningless on other workspaces.
         let mut removed = removed;
+        self.scratch_on_tile_removed(&mut removed.tile);
         self.canvas_on_tile_removed(&mut removed);
 
         removed
@@ -870,6 +886,7 @@ impl<W: LayoutElement> Workspace<W> {
         self.update_focus_floating_tiling_after_removing(from_floating);
 
         // rice: plane positions are meaningless on other workspaces.
+        self.scratch_on_column_removed(&mut column);
         self.canvas_on_column_removed(&mut column);
 
         Some(column)
@@ -1707,12 +1724,8 @@ impl<W: LayoutElement> Workspace<W> {
 
     pub fn tiles_with_ipc_layouts(&self) -> impl Iterator<Item = (&Tile<W>, WindowLayout)> {
         let scrolling = self.scrolling.tiles_with_ipc_layouts();
-        // rice: report canvas tile positions in real view coordinates.
-        let zoom = self.canvas_zoom();
-        let floating = self
-            .floating
-            .tiles_with_ipc_layouts()
-            .map(move |(tile, layout)| (tile, canvas_ext::scale_ipc_layout(layout, zoom)));
+        // rice: canvas tiles report plane positions and positions in the settled view.
+        let floating = self.canvas_floating_ipc_layouts();
         floating.chain(scrolling)
     }
 
@@ -2188,6 +2201,7 @@ impl<W: LayoutElement> Workspace<W> {
         }
         self.floating.verify_invariants();
         self.canvas_verify_invariants();
+        self.scratch_verify_invariants(); // rice
 
         if self.floating.is_empty() {
             assert!(

@@ -7,8 +7,9 @@ use anyhow::{anyhow, bail, Context};
 use niri_config::OutputName;
 use niri_ipc::socket::Socket;
 use niri_ipc::{
-    Action, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput, Mode, Output,
-    OutputConfigChanged, Overview, Request, Response, Transform, Window, WindowLayout,
+    Action, CanvasViewState, Cast, CastKind, CastTarget, Event, KeyboardLayouts, LogicalOutput,
+    Mode, Output, OutputConfigChanged, Overview, Request, Response, Transform, Window,
+    WindowLayout, WorkspaceMode,
 };
 use serde_json::json;
 
@@ -49,6 +50,7 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
         Msg::RequestError => Request::ReturnError,
         Msg::OverviewState => Request::OverviewState,
         Msg::Casts => Request::Casts,
+        Msg::CanvasViews => Request::CanvasViews,
         Msg::RawRequest => {
             let mut buf = Vec::new();
             let mut stdin = std::io::stdin().lock();
@@ -400,7 +402,14 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 } else {
                     String::new()
                 };
-                println!("{is_active}{idx}{name}");
+                // rice: canvas mode and hidden workspaces.
+                let mode = if ws.mode == WorkspaceMode::Canvas {
+                    " (canvas)"
+                } else {
+                    ""
+                };
+                let hidden = if ws.is_hidden { " (hidden)" } else { "" };
+                println!("{is_active}{idx}{name}{mode}{hidden}");
             }
         }
         Msg::KeyboardLayouts => {
@@ -525,6 +534,45 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                     Event::TouchpadToggled { on } => {
                         println!("Touchpad enabled: {on}");
                     }
+                    // rice: canvas mode, canvas and strip views.
+                    Event::WorkspaceModeChanged { id, mode } => {
+                        println!("Workspace {id}: mode changed to {mode:?}");
+                    }
+                    Event::CanvasViewsChanged { views } => {
+                        println!("Canvas views changed: {views:?}");
+                    }
+                    Event::CanvasViewChanged { view } => {
+                        let CanvasViewState {
+                            workspace_id,
+                            offset,
+                            zoom,
+                            animating,
+                            ..
+                        } = view;
+                        let animating = if animating { " (animating)" } else { "" };
+                        println!(
+                            "Workspace {workspace_id}: canvas view changed to offset {}, {} \
+                             zoom {}{animating}",
+                            fmt_rounded(offset.0),
+                            fmt_rounded(offset.1),
+                            fmt_zoom(zoom),
+                        );
+                    }
+                    Event::StripViewsChanged { views } => {
+                        println!("Strip views changed: {views:?}");
+                    }
+                    Event::StripViewChanged {
+                        workspace_id,
+                        view_offset,
+                        target_view_offset,
+                        ..
+                    } => {
+                        println!(
+                            "Workspace {workspace_id}: strip view changed to {} (target {})",
+                            fmt_rounded(view_offset),
+                            fmt_rounded(target_view_offset),
+                        );
+                    }
                 }
             }
         }
@@ -566,6 +614,28 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
             casts.sort_by_key(|c| (c.session_id, c.stream_id));
             for cast in casts {
                 print_cast(&cast);
+                println!();
+            }
+        }
+        Msg::CanvasViews => {
+            let Response::CanvasViews(mut views) = response else {
+                bail!("unexpected response: expected CanvasViews, got {response:?}");
+            };
+
+            if json {
+                let views = serde_json::to_string(&views).context("error formatting response")?;
+                println!("{views}");
+                return Ok(());
+            }
+
+            if views.is_empty() {
+                println!("No canvas workspaces.");
+                return Ok(());
+            }
+
+            views.sort_by_key(|view| view.workspace_id);
+            for view in views {
+                print_canvas_view(&view);
                 println!();
             }
         }
@@ -740,12 +810,19 @@ fn print_window(window: &Window) {
         println!("  Workspace ID: (none)");
     }
 
+    // rice: scratchpad origin.
+    if let Some(id) = window.hidden_from_workspace_id {
+        println!("  Hidden from workspace ID: {id}");
+    }
+
     let WindowLayout {
         pos_in_scrolling_layout,
         tile_size,
         window_size,
         tile_pos_in_workspace_view,
         window_offset_in_tile,
+        pos_in_canvas,
+        is_pinned,
     } = window.layout;
 
     println!("  Layout:");
@@ -767,12 +844,73 @@ fn print_window(window: &Window) {
         );
     }
 
+    // rice: canvas plane position.
+    if let Some(pos) = pos_in_canvas {
+        let pinned = if is_pinned { " (pinned)" } else { "" };
+        println!(
+            "    Canvas position: {}, {}{pinned}",
+            fmt_rounded(pos.0),
+            fmt_rounded(pos.1)
+        );
+    }
+
     println!("    Window size: {} x {}", window_size.0, window_size.1);
     println!(
         "    Window offset in tile: {} x {}",
         fmt_rounded(window_offset_in_tile.0),
         fmt_rounded(window_offset_in_tile.1)
     );
+}
+
+/// rice: pretty-prints a canvas view.
+fn print_canvas_view(view: &CanvasViewState) {
+    let CanvasViewState {
+        workspace_id,
+        offset,
+        zoom,
+        target_offset,
+        target_zoom,
+        view_size,
+        animating,
+        ref regions,
+    } = *view;
+
+    let animating = if animating { " (animating)" } else { "" };
+    println!("Canvas of workspace ID {workspace_id}:{animating}");
+    println!(
+        "  Offset: {}, {}",
+        fmt_rounded(offset.0),
+        fmt_rounded(offset.1)
+    );
+    println!("  Zoom: {}", fmt_zoom(zoom));
+    println!(
+        "  Target offset: {}, {}",
+        fmt_rounded(target_offset.0),
+        fmt_rounded(target_offset.1)
+    );
+    println!("  Target zoom: {}", fmt_zoom(target_zoom));
+    println!(
+        "  View size: {} x {}",
+        fmt_rounded(view_size.0),
+        fmt_rounded(view_size.1)
+    );
+    for region in regions {
+        println!(
+            "  Region \"{}\": {}, {} {} x {}",
+            region.name,
+            fmt_rounded(region.x),
+            fmt_rounded(region.y),
+            fmt_rounded(region.w),
+            fmt_rounded(region.h)
+        );
+    }
+}
+
+/// rice: zoom factors with up to three decimals.
+fn fmt_zoom(zoom: f64) -> String {
+    let s = format!("{zoom:.3}");
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    s.to_owned()
 }
 
 fn print_cast(cast: &Cast) {
