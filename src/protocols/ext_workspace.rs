@@ -9,6 +9,8 @@
 //! - Workspace id: name for named workspaces, unset for unnamed. Because ids in this protocol are
 //!   expected to be stable across sessions.
 //! - Workspace name: name for named workspaces, index for unnamed.
+//! - rice: hidden (scratchpad) workspaces are not announced, and the index above is the visual
+//!   index that counts only the visible workspaces (the one `focus-workspace N` takes).
 
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
@@ -97,6 +99,10 @@ pub fn refresh(state: &mut State) {
     // Remove workspaces that no longer exist (sending workspace_leave to workspace groups).
     let mut seen_workspaces = HashMap::new();
     for (mon, _, ws) in state.niri.layout.workspaces() {
+        // rice: hidden (scratchpad) workspaces are not announced.
+        if ws.is_hidden() {
+            continue;
+        }
         let output = mon.map(|mon| mon.output());
         seen_workspaces.insert(ws.id(), output);
     }
@@ -139,7 +145,14 @@ pub fn refresh(state: &mut State) {
 
     // Update existing workspaces and create new ones.
     for (mon, ws_idx, ws) in state.niri.layout.workspaces() {
-        changed |= refresh_workspace(protocol_state, mon, ws_idx, ws);
+        // rice: hidden workspaces are skipped; coordinates and default names use the visual
+        // index (the one `focus-workspace N` takes).
+        if ws.is_hidden() {
+            continue;
+        }
+        let visual_idx = usize::from(state.niri.layout.ipc_workspace_idx(mon, ws_idx)).max(1) - 1;
+        let is_active = mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx);
+        changed |= refresh_workspace(protocol_state, mon, visual_idx, is_active, ws);
     }
 
     // Update workspace groups and create new ones, sending workspace_enter events as needed.
@@ -267,10 +280,11 @@ fn refresh_workspace(
     protocol_state: &mut ExtWorkspaceManagerState,
     mon: Option<&Monitor<Mapped>>,
     ws_idx: usize,
+    is_active: bool,
     ws: &Workspace<Mapped>,
 ) -> bool {
     let mut state = ext_workspace_handle_v1::State::empty();
-    if mon.is_some_and(|mon| mon.active_workspace_idx() == ws_idx) {
+    if is_active {
         state |= ext_workspace_handle_v1::State::Active;
     }
     if ws.is_urgent() {

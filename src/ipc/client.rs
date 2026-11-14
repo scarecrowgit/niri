@@ -374,7 +374,8 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 return Ok(());
             }
 
-            response.sort_by_key(|ws| ws.idx);
+            // rice: hidden workspaces (idx 0) go after the visible ones.
+            response.sort_by_key(|ws| (ws.is_hidden, ws.idx));
             response.sort_by(|a, b| a.output.cmp(&b.output));
 
             let mut current_output = if let Some(output) = response[0].output.as_deref() {
@@ -396,7 +397,12 @@ pub fn handle_msg(mut msg: Msg, json: bool, print_request: bool) -> anyhow::Resu
                 }
 
                 let is_active = if ws.is_active { " * " } else { "   " };
-                let idx = ws.idx;
+                // rice: hidden workspaces have no index.
+                let idx = if ws.is_hidden {
+                    String::from("-")
+                } else {
+                    ws.idx.to_string()
+                };
                 let name = if let Some(name) = ws.name.as_deref() {
                     format!(" \"{name}\"")
                 } else {

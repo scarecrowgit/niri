@@ -4046,9 +4046,21 @@ impl Niri {
         &self,
         workspace_reference: WorkspaceReference,
     ) -> Option<(Option<Output>, usize)> {
+        self.find_output_and_workspace_index_for(workspace_reference, None)
+    }
+
+    /// Like `find_output_and_workspace_index()`, with index references resolved on the monitor
+    /// of `window` (the active monitor if `None`).
+    pub fn find_output_and_workspace_index_for(
+        &self,
+        workspace_reference: WorkspaceReference,
+        window: Option<&Window>,
+    ) -> Option<(Option<Output>, usize)> {
         let (target_workspace_index, target_workspace) = match workspace_reference {
             WorkspaceReference::Index(index) => {
-                return Some((None, index.saturating_sub(1) as usize));
+                // rice: indices count the visible workspaces only (hidden ones are skipped).
+                let index = self.layout.resolve_workspace_index(window, index);
+                return Some((None, index));
             }
             WorkspaceReference::Name(name) => self.layout.find_workspace_by_name(&name)?,
             WorkspaceReference::Id(id) => {

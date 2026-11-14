@@ -652,3 +652,96 @@ fn moving_a_hidden_workspace_to_the_top() {
         ],
     );
 }
+
+fn names(layout: &Layout<TestWindow>) -> Vec<String> {
+    monitor(layout)
+        .workspaces
+        .iter()
+        .map(|ws| ws.name().cloned().unwrap_or_default())
+        .collect()
+}
+
+#[test]
+fn index_references_count_visible_workspaces() {
+    // ws3 (0), ws2 hidden (1), ws1 (2), empty (3).
+    let layout = setup();
+    assert_eq!(layout.resolve_workspace_index(None, 0), 0);
+    assert_eq!(layout.resolve_workspace_index(None, 1), 0);
+    assert_eq!(layout.resolve_workspace_index(None, 2), 2);
+    assert_eq!(layout.resolve_workspace_index(None, 3), 3);
+    // Past the end: still past the end, so that the callers clamp as before.
+    assert_eq!(layout.resolve_workspace_index(None, 4), 4);
+    assert_eq!(layout.resolve_workspace_index(None, 6), 6);
+
+    let mon = monitor(&layout);
+    assert_eq!(layout.ipc_workspace_idx(Some(mon), 0), 1);
+    assert_eq!(layout.ipc_workspace_idx(Some(mon), 1), 0);
+    assert_eq!(layout.ipc_workspace_idx(Some(mon), 2), 2);
+    assert_eq!(layout.ipc_workspace_idx(Some(mon), 3), 3);
+
+    // Without hidden workspaces, indices are unchanged.
+    let layout = check_ops([Op::AddOutput(1), named(1), named(3)]);
+    for idx in 0..5 {
+        assert_eq!(
+            layout.resolve_workspace_index(None, idx + 1),
+            usize::from(idx)
+        );
+    }
+    let mon = monitor(&layout);
+    for idx in 0..3 {
+        assert_eq!(layout.ipc_workspace_idx(Some(mon), idx), idx as u8 + 1);
+    }
+}
+
+#[test]
+fn index_references_use_the_window_monitor() {
+    // Output 2 has a hidden workspace first; output 1 has none.
+    let layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::Scratch(ScratchOp::AddHiddenWorkspace {
+            ws_name: 5,
+            output_names: vec![2],
+        }),
+        Op::FocusOutput(2),
+        window(1),
+        Op::FocusOutput(1),
+    ]);
+    assert_eq!(layout.active_output().unwrap().name(), "output1");
+    // Active monitor (no hidden workspace): identity.
+    assert_eq!(layout.resolve_workspace_index(None, 1), 0);
+    // Window 1's monitor: visual 1 skips the hidden workspace at the top.
+    let mon2 = layout
+        .monitors()
+        .find(|mon| mon.output_name() == "output2")
+        .unwrap();
+    assert!(mon2.workspaces[0].is_hidden());
+    assert_eq!(layout.resolve_workspace_index(Some(&1), 1), 1);
+}
+
+#[test]
+fn move_workspace_to_index_counts_visible_workspaces() {
+    let mut layout = setup();
+    // Focus ws1 and move it to visual index 1 (0-based 0).
+    check_ops_on_layout(&mut layout, [window(1), Op::FocusWorkspaceDown, window(2)]);
+    assert_eq!(active_name(&layout).as_deref(), Some("ws1"));
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWorkspaceToIndex {
+            ws_name: None,
+            target_idx: 0,
+        }],
+    );
+    assert_eq!(names(&layout), ["ws1", "ws3", "ws2", ""]);
+
+    // Visual index 2 (0-based 1) is ws3's place: the hidden workspace doesn't count.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::MoveWorkspaceToIndex {
+            ws_name: None,
+            target_idx: 1,
+        }],
+    );
+    assert_eq!(names(&layout), ["ws3", "ws1", "ws2", ""]);
+    assert_eq!(active_name(&layout).as_deref(), Some("ws1"));
+}

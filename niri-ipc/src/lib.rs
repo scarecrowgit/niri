@@ -1708,6 +1708,10 @@ pub struct Workspace {
     /// current position on its monitor. Workspaces on different monitors can have the same index.
     ///
     /// If you need a unique workspace id that doesn't change, see [`Self::id`].
+    ///
+    /// rice: the index counts only the visible workspaces of the monitor (1…n). Hidden
+    /// (scratchpad) workspaces, see [`Self::is_hidden`], have `idx` 0 and can only be referenced
+    /// by name or id.
     pub idx: u8,
     /// Optional name of the workspace.
     pub name: Option<String>,

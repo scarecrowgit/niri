@@ -1393,10 +1393,10 @@ impl<W: LayoutElement> Layout<W> {
         reference: WorkspaceReference,
     ) -> Option<&mut Workspace<W>> {
         if let WorkspaceReference::Index(index) = reference {
-            self.active_monitor().and_then(|m| {
-                let index = index.saturating_sub(1) as usize;
-                m.workspaces.get_mut(index)
-            })
+            // rice: indices count the visible workspaces only.
+            let index = self.resolve_workspace_index(None, index);
+            self.active_monitor()
+                .and_then(|m| m.workspaces.get_mut(index))
         } else {
             self.workspaces_mut().find(|ws| match &reference {
                 WorkspaceReference::Name(ref_name) => ws
@@ -4665,6 +4665,8 @@ impl<W: LayoutElement> Layout<W> {
             (monitor, index)
         };
 
+        // rice: `new_idx` is a visual index (hidden workspaces don't count).
+        let new_idx = scratch::real_ws_idx(&monitor.workspaces, new_idx);
         monitor.move_workspace_to_idx(old_idx, new_idx);
     }
 

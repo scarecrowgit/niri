@@ -1,8 +1,14 @@
 //! rice: hidden (scratchpad) workspaces.
 //!
-//! A named workspace with `hidden` in its config entry is a *hidden* workspace. It keeps its real
-//! index on its monitor (IPC `idx`, `focus-workspace N`, `move-window-to-workspace N`), but:
+//! A named workspace with `hidden` in its config entry is a *hidden* workspace. It keeps its place
+//! in its monitor's workspace list (the layout code works with real indices), but:
 //!
+//! - it doesn't count for index references: `focus-workspace N`, `move-window-to-workspace N`,
+//!   `move-workspace-to-index N` and IPC `Workspace::idx` use 1-based *visual* indices over the
+//!   visible workspaces of the monitor (see [`Layout::resolve_workspace_index`],
+//!   [`Layout::ipc_workspace_idx`]); hidden workspaces have IPC `idx` 0 and are addressed by name
+//!   or id;
+//! - it is not announced through the ext-workspace protocol;
 //! - it never becomes the active workspace of its monitor (activation requests for it are ignored,
 //!   up/down navigation and workspace-switch gestures skip it);
 //! - it is never rendered, neither normally nor in the overview, and takes up no space there
@@ -21,7 +27,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use smithay::utils::{Logical, Point};
 
-use super::workspace::WorkspaceId;
+use super::monitor::Monitor;
+use super::workspace::{Workspace, WorkspaceId};
 use super::{ActivateWindow, InteractiveMoveState, Layout, LayoutElement, MonitorSet};
 
 /// Where a tile came from before it landed on a hidden workspace.
@@ -56,7 +63,72 @@ pub struct HiddenWindow<Id> {
     pub hidden_seq: u64,
 }
 
+/// Visual index (0-based, counting only visible workspaces) of the workspace at real index `idx`
+/// in `workspaces`, or `None` if it is hidden.
+pub fn visual_ws_idx<W: LayoutElement>(workspaces: &[Workspace<W>], idx: usize) -> Option<usize> {
+    let ws = workspaces.get(idx)?;
+    if ws.is_hidden() {
+        return None;
+    }
+    Some(
+        workspaces[..idx]
+            .iter()
+            .filter(|ws| !ws.is_hidden())
+            .count(),
+    )
+}
+
+/// Real index of the workspace with the 0-based *visual* index `visual_idx` in `workspaces`.
+///
+/// Indices past the last visible workspace map past the end of `workspaces` by the same amount,
+/// so that the out-of-range handling of the caller (usually clamping to the last workspace, which
+/// is never hidden) stays as it is.
+pub fn real_ws_idx<W: LayoutElement>(workspaces: &[Workspace<W>], visual_idx: usize) -> usize {
+    let mut visible = 0;
+    for (idx, ws) in workspaces.iter().enumerate() {
+        if ws.is_hidden() {
+            continue;
+        }
+        if visible == visual_idx {
+            return idx;
+        }
+        visible += 1;
+    }
+    workspaces.len() + (visual_idx - visible)
+}
+
 impl<W: LayoutElement> Layout<W> {
+    /// Workspace index for IPC (`niri_ipc::Workspace::idx`): 1-based among the visible
+    /// workspaces of the monitor, `0` for hidden workspaces.
+    pub fn ipc_workspace_idx(&self, mon: Option<&Monitor<W>>, ws_idx: usize) -> u8 {
+        let visual = match (mon, &self.monitor_set) {
+            (Some(mon), _) => visual_ws_idx(&mon.workspaces, ws_idx),
+            (None, MonitorSet::NoOutputs { workspaces }) => visual_ws_idx(workspaces, ws_idx),
+            (None, MonitorSet::Normal { .. }) => None,
+        };
+        visual.map_or(0, |idx| u8::try_from(idx + 1).unwrap_or(u8::MAX))
+    }
+
+    /// Resolves a 1-based workspace index from an index reference (`focus-workspace N`,
+    /// `move-window-to-workspace N`, …) to a real index. The index counts the visible workspaces
+    /// of the monitor of `window` (the active monitor if `None`).
+    pub fn resolve_workspace_index(&self, window: Option<&W::Id>, index: u8) -> usize {
+        let visual_idx = usize::from(index.saturating_sub(1));
+        match &self.monitor_set {
+            MonitorSet::Normal {
+                monitors,
+                active_monitor_idx,
+                ..
+            } => {
+                let mon = window
+                    .and_then(|win| monitors.iter().find(|mon| mon.has_window(win)))
+                    .unwrap_or(&monitors[*active_monitor_idx]);
+                real_ws_idx(&mon.workspaces, visual_idx)
+            }
+            MonitorSet::NoOutputs { workspaces } => real_ws_idx(workspaces, visual_idx),
+        }
+    }
+
     /// Windows on hidden workspaces, most recently hidden first.
     pub fn hidden_windows(&self) -> Vec<HiddenWindow<W::Id>> {
         let mut hidden = Vec::new();

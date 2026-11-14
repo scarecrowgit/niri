@@ -1710,8 +1710,10 @@ impl State {
             } => {
                 let id = MappedId::specific(id);
                 if let Some(window) = self.niri.find_window_by_id(id) {
-                    if let Some((output, index)) =
-                        self.niri.find_output_and_workspace_index(reference)
+                    // rice: an index counts the visible workspaces of the window's monitor.
+                    if let Some((output, index)) = self
+                        .niri
+                        .find_output_and_workspace_index_for(reference, Some(&window))
                     {
                         let target_was_active = self
                             .niri

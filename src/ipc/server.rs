@@ -848,7 +848,8 @@ impl State {
             // Check for any changes that we can't signal as individual events.
             // rice: including the hidden flag.
             let output_name = mon.map(|mon| mon.output_name());
-            if ipc_ws.idx != u8::try_from(ws_idx + 1).unwrap_or(u8::MAX)
+            // rice: visual index, 0 for hidden workspaces.
+            if ipc_ws.idx != layout.ipc_workspace_idx(mon, ws_idx)
                 || ipc_ws.name.as_ref() != ws.name()
                 || ipc_ws.output.as_ref() != output_name
                 || ipc_ws.is_hidden != ws.is_hidden()
@@ -905,7 +906,7 @@ impl State {
                     let id = ws.id().get();
                     Workspace {
                         id,
-                        idx: u8::try_from(ws_idx + 1).unwrap_or(u8::MAX),
+                        idx: layout.ipc_workspace_idx(mon, ws_idx), // rice
                         name: ws.name().cloned(),
                         output: mon.map(|mon| mon.output_name().clone()),
                         is_urgent: ws.is_urgent(),
