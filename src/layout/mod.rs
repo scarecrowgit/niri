@@ -92,6 +92,7 @@ pub mod tile;
 pub mod title_bar; // ashd
 pub mod work_area; // ashd
 pub mod workspace;
+mod ws_by_index; // ashd
 
 #[cfg(test)]
 mod tests;
@@ -1246,6 +1247,15 @@ impl<W: LayoutElement> Layout<W> {
                     for (idx, ws) in mon.workspaces.iter_mut().enumerate() {
                         if ws.has_window(window) {
                             let removed = ws.remove_tile(window, transaction);
+
+                            // ashd: with create-workspaces-by-index only trailing empty
+                            // workspaces go.
+                            if mon.options.layout.create_workspaces_by_index {
+                                if mon.workspace_switch.is_none() {
+                                    mon.clean_up_workspaces();
+                                }
+                                return Some(removed);
+                            }
 
                             // Clean up empty workspaces that are not active and not last.
                             if !ws.has_windows_or_name()

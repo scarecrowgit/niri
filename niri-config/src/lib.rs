@@ -2084,6 +2084,7 @@ mod tests {
                     corner_radius: 0.0,
                     clip: false,
                 },
+                create_workspaces_by_index: false,
             },
             prefer_no_csd: true,
             cursor: Cursor {

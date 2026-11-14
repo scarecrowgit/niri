@@ -662,6 +662,12 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn clean_up_workspaces(&mut self) {
         assert!(self.workspace_switch.is_none());
 
+        // ashd: with create-workspaces-by-index only trailing empty workspaces go.
+        if self.creates_workspaces_by_index() {
+            self.clean_up_workspaces_by_index();
+            return;
+        }
+
         let range_start = if self.options.layout.empty_workspace_above_first {
             1
         } else {
@@ -852,6 +858,8 @@ impl<W: LayoutElement> Monitor<W> {
             self.active_workspace_idx
         };
         let source_id = self.workspaces[source_workspace_idx].id();
+        // ashd: with create-workspaces-by-index the target workspace is created first.
+        self.ensure_workspace_for_move(window, idx);
         // ashd: windows leaving a hidden workspace just appear (it is not on screen).
         let from_hidden = self.workspaces[source_workspace_idx].is_hidden();
 
@@ -955,6 +963,7 @@ impl<W: LayoutElement> Monitor<W> {
 
     pub fn move_column_to_workspace(&mut self, idx: usize, activate: bool) {
         let source_workspace_idx = self.active_workspace_idx;
+        self.ensure_workspace_for_move(None, idx); // ashd: create-workspaces-by-index
 
         let new_idx = min(idx, self.workspaces.len() - 1);
         if new_idx == source_workspace_idx {
@@ -1051,10 +1060,12 @@ impl<W: LayoutElement> Monitor<W> {
     }
 
     pub fn switch_workspace(&mut self, idx: usize) {
+        self.ensure_workspace_for_index(idx); // ashd: create-workspaces-by-index
         self.activate_workspace(min(idx, self.workspaces.len() - 1));
     }
 
     pub fn switch_workspace_auto_back_and_forth(&mut self, idx: usize) {
+        self.ensure_workspace_for_index(idx); // ashd: create-workspaces-by-index
         let idx = min(idx, self.workspaces.len() - 1);
 
         if idx == self.active_workspace_idx {
@@ -1233,6 +1244,7 @@ impl<W: LayoutElement> Monitor<W> {
     pub fn update_config(&mut self, base_options: Rc<Options>) {
         let options =
             Rc::new(Options::clone(&base_options).with_merged_layout(self.layout_config.as_ref()));
+        let by_index_was_on = self.creates_workspaces_by_index(); // ashd
 
         if self.options.layout.empty_workspace_above_first
             != options.layout.empty_workspace_above_first
@@ -1259,6 +1271,13 @@ impl<W: LayoutElement> Monitor<W> {
         // ashd: a workspace may have become hidden or visible.
         self.ensure_active_visible();
         self.drop_stale_workspace_switch();
+        // ashd: create-workspaces-by-index changed (or a workspace became hidden, which no longer
+        // keeps the empty workspaces before it).
+        if (by_index_was_on || self.creates_workspaces_by_index())
+            && self.workspace_switch.is_none()
+        {
+            self.clean_up_workspaces();
+        }
     }
 
     pub fn update_layout_config(&mut self, layout_config: Option<niri_config::LayoutPart>) -> bool {
@@ -2416,7 +2435,10 @@ impl<W: LayoutElement> Monitor<W> {
         } else {
             0
         };
-        if self.workspace_switch.is_none() {
+        // ashd: with create-workspaces-by-index, empty workspaces before a used one stay.
+        if self.workspace_switch.is_none() && self.creates_workspaces_by_index() {
+            self.verify_by_index_invariants();
+        } else if self.workspace_switch.is_none() {
             for (idx, ws) in self
                 .workspaces
                 .iter()

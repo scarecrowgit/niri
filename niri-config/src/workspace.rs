@@ -37,10 +37,14 @@ impl<S: knuffel::traits::ErrorSpan> knuffel::Decode<S> for WorkspaceLayoutPart {
             // Check for disallowed properties.
             //
             // - empty-workspace-above-first is a monitor-level concept.
+            // - ashd: so is create-workspaces-by-index.
             // - insert-hint customization could make sense for workspaces, however currently it is
             //   also handled at the monitor level (since insert hints in-between workspaces are a
             //   monitor-level concept), so for now this config option would do nothing.
-            if matches!(name, "empty-workspace-above-first" | "insert-hint") {
+            if matches!(
+                name,
+                "empty-workspace-above-first" | "insert-hint" | "create-workspaces-by-index"
+            ) {
                 ctx.emit_error(DecodeError::unexpected(
                     child,
                     "node",
@@ -140,5 +144,33 @@ mod tests {
     #[test]
     fn hidden_takes_no_arguments() {
         assert!(Config::parse_mem(r#"workspace "scratch" { hidden "yes"; }"#).is_err());
+    }
+
+    #[test]
+    fn parse_create_workspaces_by_index() {
+        let config = Config::parse_mem("").unwrap();
+        assert!(!config.layout.create_workspaces_by_index);
+
+        let config = Config::parse_mem("layout { create-workspaces-by-index; }").unwrap();
+        assert!(config.layout.create_workspaces_by_index);
+
+        let config = Config::parse_mem(
+            r#"
+            layout { create-workspaces-by-index; }
+            output "DP-1" {
+                layout { create-workspaces-by-index false; }
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(config.layout.create_workspaces_by_index);
+        let part = config.outputs.0[0].layout.as_ref().unwrap();
+        assert_eq!(part.create_workspaces_by_index.map(|f| f.0), Some(false));
+
+        // A monitor-level option: not allowed per workspace.
+        assert!(
+            Config::parse_mem(r#"workspace "a" { layout { create-workspaces-by-index; } }"#)
+                .is_err()
+        );
     }
 }

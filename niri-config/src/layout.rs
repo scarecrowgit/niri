@@ -34,6 +34,9 @@ pub struct Layout {
     pub title_bar: TitleBar,
     // ashd: working area outline and clip.
     pub work_area: WorkArea,
+    /// ashd: index references past the last workspace create workspaces up to that index, and
+    /// empty workspaces below a used one are kept (only trailing empty ones are removed).
+    pub create_workspaces_by_index: bool,
 }
 
 impl Default for Layout {
@@ -67,6 +70,7 @@ impl Default for Layout {
             canvas: Canvas::default(),
             title_bar: TitleBar::default(),
             work_area: WorkArea::default(),
+            create_workspaces_by_index: false,
         }
     }
 }
@@ -87,6 +91,8 @@ impl MergeWith<LayoutPart> for Layout {
             title_bar, // ashd
             work_area, // ashd
             struts,    // ashd: per side
+            // ashd: numbered workspaces created on demand.
+            create_workspaces_by_index,
         );
 
         merge_clone!(
@@ -160,6 +166,9 @@ pub struct LayoutPart {
     // ashd: working area outline and clip.
     #[knuffel(child)]
     pub work_area: Option<WorkAreaPart>,
+    // ashd: numbered workspaces created on demand.
+    #[knuffel(child)]
+    pub create_workspaces_by_index: Option<Flag>,
 }
 
 #[derive(knuffel::Decode, Debug, Clone, Copy, PartialEq)]
