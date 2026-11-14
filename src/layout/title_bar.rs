@@ -130,7 +130,7 @@ impl LabelKey {
 
 /// Width bucket (physical px) for a label at most `max_width` physical px wide.
 fn label_bucket(max_width: f64) -> Option<i32> {
-    if !(max_width >= LABEL_BUCKET_BASE) {
+    if max_width.is_nan() || max_width < LABEL_BUCKET_BASE {
         return None;
     }
     let n = ((max_width / LABEL_BUCKET_BASE).ln() / LABEL_BUCKET_STEP.ln()).floor();
