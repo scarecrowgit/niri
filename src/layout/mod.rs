@@ -60,6 +60,7 @@ use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::scrolling::ScrollDirection;
 use crate::niri_render_elements;
 use crate::render_helpers::background_effect::BackgroundEffectElement;
+use crate::render_helpers::minify::MinifyRenderElement; // ashd
 use crate::render_helpers::offscreen::OffscreenData;
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::snapshot::RenderSnapshot;
@@ -4989,7 +4990,7 @@ impl<W: LayoutElement> Layout<W> {
         &self,
         ctx: RenderCtx<R>,
         output: &Output,
-        push: &mut dyn FnMut(RescaleRenderElement<TileRenderElement<R>>),
+        push: &mut dyn FnMut(MinifyRenderElement<RescaleRenderElement<TileRenderElement<R>>>),
     ) {
         if self.update_render_elements_time != self.clock.now() {
             error!("clock moved between updating render elements and rendering");
@@ -5005,18 +5006,22 @@ impl<W: LayoutElement> Layout<W> {
 
         let scale = Scale::from(move_.output.current_scale().fractional_scale());
         // ashd: over a canvas the tile is drawn at the canvas zoom.
-        let zoom = self.overview_zoom() * self.interactive_move_canvas_zoom(move_);
+        let canvas_zoom = self.interactive_move_canvas_zoom(move_);
+        let zoom = self.overview_zoom() * canvas_zoom;
         let pos_in_backdrop = move_.tile_render_location(zoom);
         let xray_pos = XrayPos::new(pos_in_backdrop, zoom);
+        // ashd: same minifying filter as the canvas windows it is dragged over.
+        let minify = canvas_zoom < 1. && self.options.layout.canvas.smooth_zoom_out;
 
         move_
             .tile
             .render(ctx, pos_in_backdrop, xray_pos, true, &mut |elem| {
-                push(RescaleRenderElement::from_element(
+                let elem = RescaleRenderElement::from_element(
                     elem,
                     pos_in_backdrop.to_physical_precise_round(scale),
                     zoom,
-                ));
+                );
+                push(MinifyRenderElement::new(elem, minify));
             });
     }
 

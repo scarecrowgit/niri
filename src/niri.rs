@@ -7686,7 +7686,10 @@ niri_render_elements! {
 niri_render_elements! {
     OutputRenderElements<R> => {
         Monitor = MonitorRenderElement<R>,
-        RescaledTile = RescaleRenderElement<TileRenderElement<R>>,
+        // ashd: minifying filter for the moved tile over a zoomed-out canvas.
+        RescaledTile = crate::render_helpers::minify::MinifyRenderElement<
+            RescaleRenderElement<TileRenderElement<R>>,
+        >,
         LayerSurface = LayerSurfaceRenderElement<R>,
         RelocatedLayerSurface = CropRenderElement<RelocateRenderElement<RescaleRenderElement<
             LayerSurfaceRenderElement<R>
