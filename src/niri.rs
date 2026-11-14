@@ -447,6 +447,8 @@ pub struct Niri {
     pub locked_hint: Option<bool>,
 
     pub screenshot_ui: ScreenshotUi,
+    /// rice: clipboard/notification choice of the open screenshot UI.
+    pub screenshot_ui_delivery: ScreenshotDelivery,
     pub config_error_notification: ConfigErrorNotification,
     pub hotkey_overlay: HotkeyOverlay,
     pub exit_confirm_dialog: ExitConfirmDialog,
@@ -576,6 +578,24 @@ pub struct PopupGrabState {
     pub root: WlSurface,
     pub grab: PopupGrab<State>,
     pub has_keyboard_grab: bool,
+}
+
+/// rice: what happens with a screenshot besides writing it to disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenshotDelivery {
+    /// Put the image into the clipboard.
+    pub copy_to_clipboard: bool,
+    /// Show the "Screenshot captured" desktop notification.
+    pub notify: bool,
+}
+
+impl Default for ScreenshotDelivery {
+    fn default() -> Self {
+        Self {
+            copy_to_clipboard: true,
+            notify: true,
+        }
+    }
 }
 
 // The surfaces here are always toplevel surfaces focused as far as niri's logic is concerned, even
@@ -2302,7 +2322,12 @@ impl State {
         self.niri.output_management_state.notify_changes(new_config);
     }
 
-    pub fn open_screenshot_ui(&mut self, show_pointer: bool, path: Option<String>) {
+    pub fn open_screenshot_ui(
+        &mut self,
+        show_pointer: bool,
+        path: Option<String>,
+        delivery: ScreenshotDelivery,
+    ) {
         if self.niri.is_locked() || self.niri.screenshot_ui.is_open() {
             return;
         }
@@ -2332,6 +2357,7 @@ impl State {
                 .screenshot_ui
                 .open(renderer, screenshots, default_output, show_pointer, path)
         });
+        self.niri.screenshot_ui_delivery = delivery; // rice
 
         self.niri
             .cursor_manager
@@ -2377,11 +2403,15 @@ impl State {
             return;
         };
         let path = path.take();
+        let delivery = mem::take(&mut self.niri.screenshot_ui_delivery); // rice
 
         self.backend.with_primary_renderer(|renderer| {
             match self.niri.screenshot_ui.capture(renderer) {
                 Ok((size, pixels)) => {
-                    if let Err(err) = self.niri.save_screenshot(size, pixels, write_to_disk, path) {
+                    if let Err(err) =
+                        self.niri
+                            .save_screenshot(size, pixels, write_to_disk, path, delivery)
+                    {
                         warn!("error saving screenshot: {err:?}");
                     }
                 }
@@ -3040,6 +3070,7 @@ impl Niri {
             locked_hint: None,
 
             screenshot_ui,
+            screenshot_ui_delivery: ScreenshotDelivery::default(), // rice
             config_error_notification,
             hotkey_overlay,
             exit_confirm_dialog,
@@ -6590,6 +6621,7 @@ impl Niri {
         write_to_disk: bool,
         include_pointer: bool,
         path: Option<String>,
+        delivery: ScreenshotDelivery,
     ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Niri::screenshot");
 
@@ -6616,7 +6648,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(size, pixels, write_to_disk, path)
+        self.save_screenshot(size, pixels, write_to_disk, path, delivery)
             .context("error saving screenshot")
     }
 
@@ -6628,6 +6660,7 @@ impl Niri {
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
+        delivery: ScreenshotDelivery,
     ) -> anyhow::Result<()> {
         let _span = tracy_client::span!("Niri::screenshot_window");
 
@@ -6684,7 +6717,7 @@ impl Niri {
             elements,
         )?;
 
-        self.save_screenshot(geo.size, pixels, write_to_disk, path)
+        self.save_screenshot(geo.size, pixels, write_to_disk, path, delivery)
             .context("error saving screenshot")
     }
 
@@ -6694,6 +6727,7 @@ impl Niri {
         pixels: Vec<u8>,
         write_to_disk: bool,
         path_arg: Option<String>,
+        delivery: ScreenshotDelivery,
     ) -> anyhow::Result<()> {
         let path = write_to_disk
             .then(|| {
@@ -6713,6 +6747,8 @@ impl Niri {
         // Prepare to set the encoded image as our clipboard selection. This must be done from the
         // main thread.
         let (tx, rx) = calloop::channel::sync_channel::<Arc<[u8]>>(1);
+        // rice: unless the caller doesn't want it in the clipboard.
+        let tx = delivery.copy_to_clipboard.then_some(tx);
         self.event_loop
             .insert_source(rx, move |event, _, state| match event {
                 calloop::channel::Event::Msg(buf) => {
@@ -6749,7 +6785,9 @@ impl Niri {
             }
 
             let buf: Arc<[u8]> = Arc::from(buf.into_boxed_slice());
-            let _ = tx.send(buf.clone());
+            if let Some(tx) = tx {
+                let _ = tx.send(buf.clone());
+            }
 
             let mut image_path = None;
 
@@ -6779,9 +6817,13 @@ impl Niri {
                 debug!("not saving screenshot to disk");
             }
 
+            // rice: the desktop notification is optional.
             #[cfg(feature = "dbus")]
-            if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref()) {
-                warn!("error showing screenshot notification: {err:?}");
+            if delivery.notify {
+                if let Err(err) = crate::utils::show_screenshot_notification(image_path.as_deref())
+                {
+                    warn!("error showing screenshot notification: {err:?}");
+                }
             }
 
             // Send screenshot completion event.

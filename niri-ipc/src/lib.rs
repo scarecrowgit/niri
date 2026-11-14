@@ -249,6 +249,19 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
+        /// rice: whether to copy the screenshot to the clipboard.
+        ///
+        /// Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        copy_to_clipboard: bool,
+
+        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        ///
+        /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
     },
     /// Screenshot the focused screen.
     ScreenshotScreen {
@@ -271,6 +284,19 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
+        /// rice: whether to copy the screenshot to the clipboard.
+        ///
+        /// Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        copy_to_clipboard: bool,
+
+        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        ///
+        /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
     },
     /// Screenshot a window.
     #[cfg_attr(feature = "clap", clap(about = "Screenshot the focused window"))]
@@ -302,6 +328,19 @@ pub enum Action {
         /// If `None`, the screenshot is saved according to the `screenshot-path` config setting.
         #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set))]
         path: Option<String>,
+        /// rice: whether to copy the screenshot to the clipboard.
+        ///
+        /// Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        copy_to_clipboard: bool,
+
+        /// rice: whether to show niri's "Screenshot captured" desktop notification.
+        ///
+        /// The `ScreenshotCaptured` IPC event is sent either way. Missing in old requests: `true`.
+        #[serde(default = "default_true")]
+        #[cfg_attr(feature = "clap", arg(long, action = clap::ArgAction::Set, default_value_t = true))]
+        notify: bool,
     },
     /// Enable or disable the keyboard shortcuts inhibitor (if any) for the focused surface.
     ToggleKeyboardShortcutsInhibit {},
@@ -2466,6 +2505,48 @@ fn default_position_change() -> PositionChange {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // rice: quiet screenshots for the shell.
+    #[test]
+    fn screenshot_delivery_defaults_for_old_clients() {
+        let old =
+            r#"{"ScreenshotScreen":{"write_to_disk":false,"show_pointer":false,"path":null}}"#;
+        let action: Action = serde_json::from_str(old).unwrap();
+        let Action::ScreenshotScreen {
+            copy_to_clipboard,
+            notify,
+            ..
+        } = action
+        else {
+            panic!("wrong action: {action:?}");
+        };
+        assert!(copy_to_clipboard && notify);
+
+        let new = r#"{"ScreenshotWindow":{"id":3,"write_to_disk":false,"show_pointer":false,"path":"/tmp/x.png","copy_to_clipboard":false,"notify":false}}"#;
+        let action: Action = serde_json::from_str(new).unwrap();
+        let Action::ScreenshotWindow {
+            id,
+            copy_to_clipboard,
+            notify,
+            ..
+        } = action
+        else {
+            panic!("wrong action: {action:?}");
+        };
+        assert_eq!(id, Some(3));
+        assert!(!copy_to_clipboard && !notify);
+
+        let ui = r#"{"Screenshot":{"show_pointer":true,"notify":false}}"#;
+        let action: Action = serde_json::from_str(ui).unwrap();
+        assert!(matches!(
+            action,
+            Action::Screenshot {
+                copy_to_clipboard: true,
+                notify: false,
+                ..
+            }
+        ));
+    }
 
     #[test]
     fn parse_size_change() {

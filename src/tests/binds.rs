@@ -103,7 +103,7 @@ fn set_up(config: &str) -> (Fixture, ClientId, WlSurface) {
         };
         for action in actions.into_iter().flatten() {
             // knuffel doesn't understand #[cfg(test)]...
-            if !matches!(action, Action::Screenshot(_, _)) {
+            if !matches!(action, Action::Screenshot(..)) {
                 *action = Action::TestAction;
             }
         }

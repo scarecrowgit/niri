@@ -142,3 +142,72 @@ impl TryFrom<CompletionShell> for Shell {
         }
     }
 }
+
+// rice: CLI flags of the fork's IPC additions.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn action(args: &[&str]) -> Action {
+        let args: Vec<String> = ["niri", "msg", "action"]
+            .iter()
+            .chain(args)
+            .map(|s| s.to_string())
+            .collect();
+        // The derived parser of the big `Action` enum needs more stack than a test thread has in
+        // debug builds.
+        let cli = std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(move || Cli::try_parse_from(args).unwrap())
+            .unwrap()
+            .join()
+            .unwrap();
+        let Some(Sub::Msg {
+            msg: Msg::Action { action },
+            ..
+        }) = cli.subcommand
+        else {
+            panic!("not an action");
+        };
+        action
+    }
+
+    #[test]
+    fn screenshot_delivery_flags() {
+        let Action::ScreenshotScreen {
+            copy_to_clipboard,
+            notify,
+            ..
+        } = action(&["screenshot-screen"])
+        else {
+            panic!()
+        };
+        assert!(copy_to_clipboard && notify);
+
+        let Action::ScreenshotScreen {
+            write_to_disk,
+            copy_to_clipboard,
+            notify,
+            ..
+        } = action(&[
+            "screenshot-screen",
+            "--write-to-disk",
+            "false",
+            "--copy-to-clipboard",
+            "false",
+            "--notify",
+            "false",
+        ])
+        else {
+            panic!()
+        };
+        assert!(!write_to_disk && !copy_to_clipboard && !notify);
+
+        let Action::ScreenshotWindow { notify, .. } =
+            action(&["screenshot-window", "--notify", "false"])
+        else {
+            panic!()
+        };
+        assert!(!notify);
+    }
+}

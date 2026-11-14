@@ -57,7 +57,7 @@ use crate::dbus::freedesktop_a11y::KbMonBlock;
 use crate::dbus::gnome_shell::GlobalShortcutsPortalBinds;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
-use crate::niri::{CastTarget, Niri, PointerVisibility, State};
+use crate::niri::{CastTarget, Niri, PointerVisibility, ScreenshotDelivery, State};
 use crate::ui::mru::{WindowMru, WindowMruUi};
 use crate::ui::screenshot_ui::ScreenshotUi;
 use crate::utils::spawning::{spawn, spawn_sh};
@@ -1004,7 +1004,17 @@ impl State {
                     self.niri.do_screen_transition(renderer, delay_ms);
                 });
             }
-            Action::ScreenshotScreen(write_to_disk, show_pointer, path) => {
+            Action::ScreenshotScreen(
+                write_to_disk,
+                show_pointer,
+                path,
+                copy_to_clipboard,
+                notify,
+            ) => {
+                let delivery = ScreenshotDelivery {
+                    copy_to_clipboard,
+                    notify,
+                };
                 let active = self.niri.layout.active_output().cloned();
                 if let Some(active) = active {
                     self.backend.with_primary_renderer(|renderer| {
@@ -1014,6 +1024,7 @@ impl State {
                             write_to_disk,
                             show_pointer,
                             path,
+                            delivery,
                         ) {
                             warn!("error taking screenshot: {err:?}");
                         }
@@ -1038,11 +1049,25 @@ impl State {
                 self.niri.screenshot_ui.toggle_pointer();
                 self.niri.queue_redraw_all();
             }
-            Action::Screenshot(show_cursor, path) => {
-                self.open_screenshot_ui(show_cursor, path);
+            Action::Screenshot(show_cursor, path, copy_to_clipboard, notify) => {
+                let delivery = ScreenshotDelivery {
+                    copy_to_clipboard,
+                    notify,
+                };
+                self.open_screenshot_ui(show_cursor, path, delivery);
                 self.niri.cancel_mru();
             }
-            Action::ScreenshotWindow(write_to_disk, show_pointer, path) => {
+            Action::ScreenshotWindow(
+                write_to_disk,
+                show_pointer,
+                path,
+                copy_to_clipboard,
+                notify,
+            ) => {
+                let delivery = ScreenshotDelivery {
+                    copy_to_clipboard,
+                    notify,
+                };
                 let focus = self.niri.layout.focus_with_output();
                 if let Some((mapped, output)) = focus {
                     self.backend.with_primary_renderer(|renderer| {
@@ -1053,6 +1078,7 @@ impl State {
                             write_to_disk,
                             show_pointer,
                             path,
+                            delivery,
                         ) {
                             warn!("error taking screenshot: {err:?}");
                         }
@@ -1064,7 +1090,13 @@ impl State {
                 write_to_disk,
                 show_pointer,
                 path,
+                copy_to_clipboard,
+                notify,
             } => {
+                let delivery = ScreenshotDelivery {
+                    copy_to_clipboard,
+                    notify,
+                };
                 let id = MappedId::specific(id);
                 if let Some((mapped, Some(output))) = self.niri.find_mapped_output_by_id(id) {
                     self.backend.with_primary_renderer(|renderer| {
@@ -1075,6 +1107,7 @@ impl State {
                             write_to_disk,
                             show_pointer,
                             path,
+                            delivery,
                         ) {
                             warn!("error taking screenshot: {err:?}");
                         }

@@ -263,18 +263,27 @@ pub enum Action {
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
+        // rice: copy to the clipboard, show the desktop notification.
+        #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
+        #[knuffel(property(name = "notify"), default = true)] bool,
     ),
     ScreenshotScreen(
         #[knuffel(property(name = "write-to-disk"), default = true)] bool,
         #[knuffel(property(name = "show-pointer"), default = true)] bool,
         // Path; not settable from knuffel
         Option<String>,
+        // rice: copy to the clipboard, show the desktop notification.
+        #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
+        #[knuffel(property(name = "notify"), default = true)] bool,
     ),
     ScreenshotWindow(
         #[knuffel(property(name = "write-to-disk"), default = true)] bool,
         #[knuffel(property(name = "show-pointer"), default = false)] bool,
         // Path; not settable from knuffel
         Option<String>,
+        // rice: copy to the clipboard, show the desktop notification.
+        #[knuffel(property(name = "copy-to-clipboard"), default = true)] bool,
+        #[knuffel(property(name = "notify"), default = true)] bool,
     ),
     #[knuffel(skip)]
     ScreenshotWindowById {
@@ -282,6 +291,8 @@ pub enum Action {
         write_to_disk: bool,
         show_pointer: bool,
         path: Option<String>,
+        copy_to_clipboard: bool, // rice
+        notify: bool,            // rice
     },
     ToggleKeyboardShortcutsInhibit,
     CloseWindow,
@@ -609,30 +620,45 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::Spawn { command } => Self::Spawn(command),
             niri_ipc::Action::SpawnSh { command } => Self::SpawnSh(command),
             niri_ipc::Action::DoScreenTransition { delay_ms } => Self::DoScreenTransition(delay_ms),
-            niri_ipc::Action::Screenshot { show_pointer, path } => {
-                Self::Screenshot(show_pointer, path)
-            }
+            niri_ipc::Action::Screenshot {
+                show_pointer,
+                path,
+                copy_to_clipboard,
+                notify,
+            } => Self::Screenshot(show_pointer, path, copy_to_clipboard, notify),
             niri_ipc::Action::ScreenshotScreen {
                 write_to_disk,
                 show_pointer,
                 path,
-            } => Self::ScreenshotScreen(write_to_disk, show_pointer, path),
+                copy_to_clipboard,
+                notify,
+            } => {
+                Self::ScreenshotScreen(write_to_disk, show_pointer, path, copy_to_clipboard, notify)
+            }
             niri_ipc::Action::ScreenshotWindow {
                 id: None,
                 write_to_disk,
                 show_pointer,
                 path,
-            } => Self::ScreenshotWindow(write_to_disk, show_pointer, path),
+                copy_to_clipboard,
+                notify,
+            } => {
+                Self::ScreenshotWindow(write_to_disk, show_pointer, path, copy_to_clipboard, notify)
+            }
             niri_ipc::Action::ScreenshotWindow {
                 id: Some(id),
                 write_to_disk,
                 show_pointer,
                 path,
+                copy_to_clipboard,
+                notify,
             } => Self::ScreenshotWindowById {
                 id,
                 write_to_disk,
                 show_pointer,
                 path,
+                copy_to_clipboard,
+                notify,
             },
             niri_ipc::Action::ToggleKeyboardShortcutsInhibit {} => {
                 Self::ToggleKeyboardShortcutsInhibit
@@ -1521,6 +1547,40 @@ impl FromStr for Key {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // rice: quiet screenshots.
+    #[test]
+    fn parse_screenshot_delivery() {
+        let config = crate::Config::parse_mem(
+            r#"
+            binds {
+                Print { screenshot-screen; }
+                Ctrl+Print { screenshot-screen write-to-disk=false copy-to-clipboard=false notify=false; }
+                Alt+Print { screenshot-window notify=false; }
+                Shift+Print { screenshot copy-to-clipboard=false; }
+            }
+            "#,
+        )
+        .unwrap();
+        let actions: Vec<_> = config
+            .binds
+            .0
+            .iter()
+            .map(|bind| match &bind.action {
+                BoundAction::Press(action) => action.clone(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            actions,
+            [
+                Action::ScreenshotScreen(true, true, None, true, true),
+                Action::ScreenshotScreen(false, true, None, false, false),
+                Action::ScreenshotWindow(true, false, None, true, false),
+                Action::Screenshot(true, None, false, true),
+            ]
+        );
+    }
 
     #[test]
     fn parse_xf86_screensaver() {
