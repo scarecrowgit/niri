@@ -69,6 +69,7 @@ pub mod canvas_actions; // rice
 pub mod canvas_pan_grab; // rice
 pub mod click_grab;
 mod decor_actions; // rice
+mod layer_focus_hook; // rice
 pub mod move_grab;
 pub mod pick_color_grab;
 pub mod pick_window_grab;
@@ -933,6 +934,8 @@ impl State {
 
         // rice: remember the focus for canvas reveal / edge-push.
         let canvas_hook = canvas_actions::CanvasActionHook::new(&action, self);
+        // rice: explicit focus actions take the keyboard from an on-demand layer surface.
+        let layer_focus_hook = layer_focus_hook::LayerFocusHook::new(&action, self);
 
         match action {
             Action::Quit(skip_confirmation) => {
@@ -2836,6 +2839,7 @@ impl State {
 
         // rice: canvas reveal / edge-push after keyboard focus and move actions.
         canvas_hook.finish(self);
+        layer_focus_hook.finish(self);
     }
 
     fn on_pointer_motion<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {

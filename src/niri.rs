@@ -1218,6 +1218,9 @@ impl State {
         self.niri.layout.activate_window(window);
         // rice: keyboard/IPC focus recentres a canvas view on the window.
         self.niri.layout.canvas_reveal_window(window);
+        // rice: and takes the keyboard from an on-demand layer surface (the window must really
+        // get the keyboard, like with the directional focus actions).
+        self.niri.layer_shell_on_demand_focus = None;
 
         let new_active = self.niri.layout.active_output().cloned();
         if new_active != active_output {
