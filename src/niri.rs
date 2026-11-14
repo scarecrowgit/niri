@@ -6652,6 +6652,7 @@ impl Niri {
             .context("error saving screenshot")
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn screenshot_window(
         &self,
         renderer: &mut GlesRenderer,
