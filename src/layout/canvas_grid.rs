@@ -129,6 +129,13 @@ impl CanvasGridRenderElement {
         self
     }
 
+    fn with_alpha(mut self, alpha: f32) -> Self {
+        if alpha < 1. {
+            self.inner = self.inner.with_alpha(alpha);
+        }
+        self
+    }
+
     pub fn has_shader(renderer: &mut impl NiriRenderer) -> bool {
         Shaders::get(renderer)
             .program(ProgramType::CanvasGrid)
@@ -460,8 +467,12 @@ impl CanvasDecorations {
         &self,
         renderer: &mut R,
         scale: f64,
+        alpha: f32,
         push: &mut dyn FnMut(CanvasDecorRenderElement),
     ) {
+        if alpha <= 0. {
+            return;
+        }
         if !self.visible {
             return;
         }
@@ -469,26 +480,32 @@ impl CanvasDecorations {
         let has_shader = CanvasGridRenderElement::has_shader(renderer);
 
         for region in self.regions.iter().filter(|r| r.visible) {
-            if let Some(elem) = region.label_element(renderer.as_gles_renderer(), scale) {
+            if let Some(elem) = region.label_element(renderer.as_gles_renderer(), scale, alpha) {
                 push(elem.into());
             }
             if has_shader {
                 for (edge, loc) in region.edges.iter().zip(region.edge_locs) {
                     // Edges cut away by the working area clip are empty.
                     if edge.params.is_some_and(|p| p.size.w > 0. && p.size.h > 0.) {
-                        push(edge.clone().with_location(loc).into());
+                        push(edge.clone().with_location(loc).with_alpha(alpha).into());
                     }
                 }
             }
         }
 
         if has_shader && self.show_grid_shader {
-            push(self.grid.clone().with_location(self.area_loc).into());
+            push(
+                self.grid
+                    .clone()
+                    .with_location(self.area_loc)
+                    .with_alpha(alpha)
+                    .into(),
+            );
         } else if self.show_background {
             let elem = SolidColorRenderElement::from_buffer(
                 &self.background,
                 self.area_loc,
-                1.,
+                alpha,
                 Kind::Unspecified,
             );
             push(elem.into());
@@ -528,6 +545,7 @@ impl RegionDecor {
         &self,
         renderer: &mut GlesRenderer,
         scale: f64,
+        alpha: f32,
     ) -> Option<PrimaryGpuTextureRenderElement> {
         if self.label_key.text.is_empty() {
             return None;
@@ -551,7 +569,7 @@ impl RegionDecor {
         let elem = TextureRenderElement::from_texture_buffer(
             texture,
             loc,
-            1.,
+            alpha,
             None,
             Some(size),
             Kind::Unspecified,

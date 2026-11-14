@@ -37,7 +37,11 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Recomputes the grid and region elements for the current canvas view.
     pub(super) fn canvas_update_decorations(&mut self) {
-        let transform = self.canvas_transform();
+        // While the grid fades out after leaving the canvas, keep the last canvas view.
+        let transform = self.canvas_transform().or_else(|| {
+            let m = self.canvas.mode_switch.as_ref()?;
+            (!m.to_canvas).then_some(m.decor_transform)
+        });
         self.canvas.decor.update_render_elements(
             transform,
             self.view_size,
@@ -54,13 +58,14 @@ impl<W: LayoutElement> Workspace<W> {
         renderer: &mut R,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
-        if !self.is_canvas() {
+        if !self.is_canvas() && !self.is_mode_switch_ongoing() {
             return;
         }
         let scale = self.scale.fractional_scale();
+        let alpha = self.canvas_decor_alpha();
         self.canvas
             .decor
-            .render(renderer, scale, &mut |elem| push(elem.into()));
+            .render(renderer, scale, alpha, &mut |elem| push(elem.into()));
     }
 }
 

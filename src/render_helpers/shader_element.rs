@@ -271,6 +271,10 @@ impl Element for ShaderRenderElement {
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // ashd: a translucent element (with_alpha) covers nothing.
+        if self.alpha < 1. {
+            return OpaqueRegions::default();
+        }
         self.opaque_regions
             .iter()
             .map(|region| region.to_physical_precise_down(scale))

@@ -266,7 +266,7 @@ impl Niri {
             return None;
         }
         if let Some(ns) = &reveal.namespace {
-            if !ns.0.is_match(&surface.namespace()) {
+            if !ns.0.is_match(surface.namespace()) {
                 return None;
             }
         }
@@ -294,7 +294,6 @@ impl Niri {
             let Some(mon) = self.layout.monitor_for_output(&output) else {
                 continue;
             };
-            let covered = mon.edge_panels_covered();
             let above = mon.render_above_top_layer();
             let output_size = mon.view_size();
 

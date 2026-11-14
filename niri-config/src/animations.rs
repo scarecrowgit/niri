@@ -6,7 +6,7 @@ use knuffel::ast::SpannedNode;
 use knuffel::errors::DecodeError;
 use knuffel::Decode as _;
 
-use crate::canvas::{CanvasPanAnim, CanvasWheelZoomAnim, CanvasZoomAnim};
+use crate::canvas::{CanvasModeSwitchAnim, CanvasPanAnim, CanvasWheelZoomAnim, CanvasZoomAnim};
 use crate::edge_reveal::EdgeRevealAnim; // ashd
 use crate::utils::{expand_home_path, expect_only_children, parse_arg_node, MergeWith};
 use crate::{FloatOrInt, Includes};
@@ -30,6 +30,7 @@ pub struct Animations {
     pub canvas_pan: CanvasPanAnim,
     pub canvas_zoom: CanvasZoomAnim,
     pub canvas_wheel_zoom: CanvasWheelZoomAnim,
+    pub canvas_mode_switch: CanvasModeSwitchAnim,
     // ashd: edge surfaces sliding over fullscreen windows.
     pub edge_reveal: EdgeRevealAnim,
 }
@@ -53,6 +54,7 @@ impl Default for Animations {
             canvas_pan: Default::default(),
             canvas_zoom: Default::default(),
             canvas_wheel_zoom: Default::default(),
+            canvas_mode_switch: Default::default(),
             edge_reveal: Default::default(),
         }
     }
@@ -95,6 +97,8 @@ pub struct AnimationsPart {
     pub canvas_zoom: Option<CanvasZoomAnim>,
     #[knuffel(child)]
     pub canvas_wheel_zoom: Option<CanvasWheelZoomAnim>,
+    #[knuffel(child)]
+    pub canvas_mode_switch: Option<CanvasModeSwitchAnim>,
     // ashd: edge surfaces sliding over fullscreen windows.
     #[knuffel(child)]
     pub edge_reveal: Option<EdgeRevealAnim>,
@@ -127,6 +131,7 @@ impl MergeWith<AnimationsPart> for Animations {
             canvas_pan,
             canvas_zoom,
             canvas_wheel_zoom,
+            canvas_mode_switch,
             edge_reveal,
         );
     }

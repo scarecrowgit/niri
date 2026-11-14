@@ -452,8 +452,6 @@ session Mod is Alt). `niri msg action screenshot-screen --path <file> --copy-to-
   on a stock floating window, or do nothing.
 - Windows opened while in canvas mode become strip columns with a fixed width equal to their
   current width when going back to strip mode (unless `open-floating true`).
-- The close animation of a *pinned* canvas window moves with the plane if the view pans during
-  it (unpinned windows stay on their plane position, as they should).
 - In the overview, canvas windows outside the viewport show next to the workspace horizontally,
   like strip columns do (niri only crops vertically there).
 - Render culling keeps tiles within half a view size of the viewport; popups extending further
@@ -469,6 +467,7 @@ session Mod is Alt). `niri msg action screenshot-screen --path <file> --copy-to-
   pointer input" below. Open: touch input and pointer constraints at zoom ≠ 1.
 - ~~IPC events and requests; hidden scratchpad workspace~~: done, see "IPC for the shell" above.
 - ~~Plane grid / dot background, named regions, title strips~~: done, see "Decorations" below.
+- ~~Pinned window close animation moving with the plane~~: fixed, see "Strip ↔ canvas transition".
 
 ## Canvas pointer input
 
@@ -1236,3 +1235,186 @@ still held) set the scope for every later open by a bind without `scope=`; on a 
 one window a quick Super+Tab then has nothing to switch to. Configs should give the binds an
 explicit `scope="all"` (the ashd NixOS config does); the test shows both behaviours.
 
+
+## Fullscreen workspaces
+
+Opt-in layout option (off by default; merges per output, rejected per workspace):
+
+```kdl
+layout {
+    fullscreen-workspaces
+}
+```
+
+A really fullscreen window (`fullscreen-window`, a client request, a window that maps
+fullscreen; not windowed fullscreen, not `maximize-column`) moves to a workspace of its own,
+inserted right after the one it was on (its *origin*); the view follows if it was the focused
+window. Module docs: `src/layout/fullscreen_ws.rs`.
+
+- The fullscreen workspace has no number: `focus-workspace N`, `move-…-to-workspace N`,
+  `move-workspace-to-index N` and IPC `idx` skip it (`Workspace::is_numbered()`, also used for
+  the hidden scratchpad), and ext-workspace doesn't announce it. It is visible: rendered,
+  reachable with workspace up/down, gestures and `focus-workspace` by id, and reported over IPC.
+- Its origin stays even if the fullscreen window was its only window (cleanup and the
+  invariants treat it as in use), so the other numbers don't shift; with
+  `create-workspaces-by-index` the fullscreen workspace counts as in use as well.
+- Leaving fullscreen (any way, including windowed fullscreen) moves the window back to its
+  origin: a strip window as a new column right of the column that was left of it (first if it
+  was first; next to the focused column if that column is gone), a window that was floating on a
+  strip back to floating, a canvas window back to its plane position. The view follows if the
+  fullscreen workspace was shown. If the origin is gone (closed, or moved to another monitor) it
+  goes to the nearest numbered workspace before (else after) the fullscreen workspace.
+- The fullscreen workspace is removed when its window leaves it (back from fullscreen, closed,
+  moved elsewhere), after the switch animation if it was shown; closing the window while it is
+  shown goes back to the origin. Other windows on it (a dialog of the fullscreen window, or a
+  window moved there) go to the origin first.
+- New windows opened while a fullscreen workspace is focused open on its origin and take the
+  focus (like macOS); child windows of the fullscreen window open next to it as usual.
+- A fullscreen window moved by an action (`move-window-to-workspace`, up/down, to another
+  output) stays fullscreen and gets a new fullscreen workspace after the target.
+- Two fullscreen windows from the same origin: the newest one is nearest to the origin.
+- Only single-window columns qualify; a fullscreen tabbed column stays where it is. Fullscreen
+  windows on hidden workspaces stay there.
+- Fullscreen workspaces are always strips (whatever `default-workspace-mode` says).
+- Turning the option off makes existing fullscreen workspaces ordinary ones.
+
+Mechanism: `Layout::sync_fullscreen_workspaces()` reconciles the layout with the fullscreen state
+of the columns; it runs right after the fullscreen actions and on every `Layout::refresh()`
+(each event loop iteration), so client-side changes are picked up in the same frame. The return
+placement uses `Monitor::move_to_workspace_placed()` (the upstream `move_to_workspace()` body
+with a column target / plane position), so the regular move-between-workspaces animation runs
+together with the workspace switch.
+
+IPC (additive, `niri_ipc::Workspace`):
+
+| Field | Meaning |
+| --- | --- |
+| `fullscreen_window_id: Option<u64>` | the fullscreen window the workspace was created for; `None` for ordinary workspaces and for one whose window has just left (removed after the switch) |
+| `fullscreen_origin_id: Option<u64>` | the workspace it came from and returns to; set for every fullscreen workspace |
+
+Both `#[serde(default)]`. Such a workspace has `idx` 0. `niri msg workspaces` lists it after its
+origin with `-` and `(fullscreen: window N)`.
+
+Files: `src/layout/fullscreen_ws.rs`, `src/layout/workspace/fullscreen_ext.rs`, tests in
+`src/layout/tests/fullscreen_ws.rs` (enter/leave from strip and canvas, column position, close
+while shown and while not shown, client unfullscreen on refresh, origin moved to another
+output, output removed, moves by action and to another output, floating return, two windows
+from one origin, new window and dialog, windowed fullscreen, with `create-workspaces-by-index`,
+hidden workspace, option off) plus the option in `arbitrary_layout_part` and an `UpdateConfig`
+turning it on + `Refresh` in both exhaustive op lists. Upstream files: `monitor.rs`
+(`move_to_workspace` → `move_to_workspace_placed`, cleanup keeps origins and removes emptied
+fullscreen workspaces, invariant), `mod.rs` (`mod fullscreen_ws`, sync after the fullscreen
+actions and in `refresh`, new-window redirect, `remove_window` keeps origins), `workspace.rs`
+(`fullscreen_slot` field), `scratch.rs` (numbering uses `is_numbered`), `ext_workspace.rs`,
+`ipc/{server,client}.rs`, `niri-ipc/src/{lib,state}.rs`, `niri-config/src/{layout,workspace,lib}.rs`.
+
+## Edge reveal over fullscreen windows
+
+```kdl
+edge-reveal {
+    on                              // off by default
+    dwell-ms 150
+    hide-delay-ms 400
+    namespace "^ashd-(rail|bar)$"   // optional filter
+}
+animations {
+    edge-reveal { spring damping-ratio=1.0 stiffness=800 epsilon=0.0001; }  // default
+}
+```
+
+Edge panels are top-layer layer-shell surfaces anchored to one output edge (and not to the
+opposite one) with a positive exclusive zone (a rail anchored left+top+bottom → left edge; a
+bar anchored left+right+bottom → bottom edge). Nothing is hard-coded about the shell; the
+namespace filter is optional. Module docs: `src/edge_reveal.rs`.
+
+- While a fullscreen window covers them, resting the pointer against an edge for `dwell-ms`
+  slides that edge's panels in above the fullscreen window; they take pointer input as usual
+  (hover, clicks, scroll, their popups and popup grabs work). They slide out `hide-delay-ms`
+  after the pointer left them and the edge, but stay while any layer surface has the keyboard
+  focus or the pointer, or a popup grab is active (a menu opened from the panel); keyboard focus
+  back on the fullscreen window lets them go.
+- Never triggers while the client under the pointer has an active pointer constraint (locked
+  or confined pointer), while a button is held (`pointer.is_grabbed()`) or a popup grab is
+  active, or while the lock screen, the screenshot UI, the window switcher or the overview is
+  up. In those states the edge is just the edge.
+- Dwell rather than a pressure threshold: the pointer position is clamped to the output, so a
+  push past the edge only exists as relative motion, which tablets, touch and absolute
+  pointers don't produce; resting at the edge works for every device, and a graze leaves before
+  the dwell is over. `dwell-ms 0` reveals on contact.
+- The slide is a per-edge animation (`animations { edge-reveal }`, frame-rate independent,
+  honours `animations { off; }` and `slowdown`); the edge state machine is plain data
+  (`EdgeTrigger`) with deadlines that wake the event loop while the pointer rests.
+- The same slide replaces the pop of the panels when a fullscreen window starts or stops
+  covering them (see "Smooth fullscreen transitions" below).
+- Only the covered (fullscreen) situation changes anything; on other workspaces the panels are
+  drawn exactly as upstream (no placement at all).
+
+Rendering: `Niri::update_edge_reveal_placements()` computes per frame where each panel is drawn
+(`Placement { offset, above }`); `render_layer_normal/popups` add the offset, and above a
+fullscreen window `render_revealed_edge_panels()` draws the revealed panels on top of the
+monitor elements (below the overlay layer; the canvas minify / title label elements are part of
+the workspace elements and stay below). Hit-testing (`contents_under`,
+`is_sticky_obscured_under`) uses the same offsets; popup grabs from a revealed panel are allowed.
+
+Tests: `src/edge_reveal.rs` (state machine: dwell, graze, leaving and hide delay, coming back,
+constraint / button blocking, uncovered reset, zero dwell, anchor → edge, edge touch and slide
+offsets) and `src/tests/ashd_edge_reveal.rs` (client level: edge push reveals and gets the
+pointer, clicking keeps it, leaving hides it; a held button blocks it; namespace filter; not
+covered is untouched; off by default).
+
+## Smooth fullscreen transitions
+
+Why leaving fullscreen was abrupt (checked with bursts in the nested session at `slowdown 8`):
+the window's own resize is animated (upstream resize animation, the title strip shrinks with
+`expanded_progress`), but niri does not draw the top layer at all while a fullscreen window is
+shown above it, so the first frame of the unfullscreen (and the frame the view settles after
+going fullscreen) pops the shell's rail, bar and header in or out at once. With a canvas origin
+the window also jumped: it was unfullscreened into a strip floating position before it went
+back onto the plane, and its zoom changed in one frame.
+
+Now, with `edge-reveal` on, the edge panels slide out together with the switch to the
+fullscreen workspace and slide back in with the switch away from it (the cover state is taken
+from the switch *target*, `Monitor::edge_panels_covered()`, not from the settled view), the
+window move and resize run inside the workspace switch, and canvas windows leave fullscreen as a
+column of the fullscreen workspace and travel back onto the plane. Remaining pops are on the
+shell side: it blanks its own bar and hides its strip header when it sees a fullscreen window
+over IPC. A canvas window still changes from the canvas zoom to 1:1 in one frame when it
+*enters* fullscreen (a per-tile scale animation would be needed).
+
+## Strip ↔ canvas transition
+
+`toggle-workspace-mode` / `set-workspace-mode` run one transition
+(`animations { canvas-mode-switch { duration-ms 280; curve "ease-out-cubic"; } }`, the default):
+
+- strip → canvas: the windows start exactly at their strip positions on a plane shown at zoom 1;
+  the view offset and zoom and the windows that go to remembered plane positions all follow the
+  same curve; the grid, regions and title labels fade in (labels also with the zoom);
+- canvas → strip: the strip is drawn zoomed from the canvas zoom to 1 around the working area
+  centre (`WorkspaceRenderElement::StripZoom`), the windows move from where the canvas drew them
+  to their columns along the same curve, the view offset jumps to its target instead of running
+  its own spring, the grid fades out (drawn with the last canvas view), the title labels follow
+  the zoom and fade out;
+- toggling again mid-way starts from what is drawn (the canvas starts at the strip's transition
+  zoom).
+
+Before, the view zoom ran on the canvas pan/zoom springs while windows with remembered
+positions ran on the window-movement spring, and leaving the canvas jumped to zoom 1 in one
+frame (window sizes popped) with the grid and labels vanishing. Hit-testing during the 280 ms
+uses the final positions. With fullscreen/maximized windows on the canvas the strip is not
+zoomed (they were not drawn zoomed). Tests: `src/layout/tests/mode_switch.rs` (first frame
+equals the strip / the canvas, last frame the plain strip, mid-way re-entry without a jump).
+Files: `src/layout/canvas.rs` (`ModeSwitch`), `workspace/canvas_ext.rs`,
+`workspace/canvas_decor.rs`, `canvas_grid.rs` (alpha), `workspace.rs` (render wrap, animation
+hooks), `scrolling/strip_snapshot.rs` (`settle_view_offset`), `render_helpers/shader_element.rs`
+(a translucent shader element has no opaque region), config `CanvasModeSwitchAnim`.
+
+Window open/close on canvas workspaces go through the same tile open/close animations as strip
+windows (checked in the nested session); the .95 → 1 scale + fade of the design spec is a
+`custom-shader` in the NixOS config (`modules/desktop/niri/animations.nix`), which applies to
+both.
+
+Pinned canvas windows now close where they are on screen (the closing snapshot of a pinned
+window no longer moves with the plane, `ClosingWindow::set_pinned`). Frames still thin out
+during a zoom animation: the compensated width is an integer that steps at fixed zoom levels,
+and applying it mid-animation would change tile sizes by 2 px several times per zoom (visible
+1 px jumps of every window), which is worse than the thin frame for 200 ms.

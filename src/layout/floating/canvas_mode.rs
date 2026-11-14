@@ -170,7 +170,8 @@ impl<W: LayoutElement> FloatingSpace<W> {
             // positioned in unscaled view coordinates, `plane - offset`.
             let shift = old.offset - transform.offset;
             if shift != Point::from((0., 0.)) {
-                for closing in &mut self.closing_windows {
+                // Pinned windows stay on screen.
+                for closing in self.closing_windows.iter_mut().filter(|c| !c.is_pinned()) {
                     closing.offset_pos(shift);
                 }
             }

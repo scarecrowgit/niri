@@ -8,7 +8,7 @@
 
 use niri_ipc::ColumnDisplay;
 
-use super::{Column, ColumnWidth, ScrollingSpace, WindowHeight};
+use super::{Column, ColumnWidth, ScrollingSpace, ViewOffset, WindowHeight};
 use crate::layout::tile::Tile;
 use crate::layout::LayoutElement;
 
@@ -53,6 +53,12 @@ impl<Id: PartialEq> StripArrangement<Id> {
 }
 
 impl<W: LayoutElement> ScrollingSpace<W> {
+    /// Jumps the view offset to where it is going (the mode switch animates the windows
+    /// instead).
+    pub fn settle_view_offset(&mut self) {
+        self.view_offset = ViewOffset::Static(self.view_offset.target());
+    }
+
     /// Snapshots the column structure (not including floating windows).
     pub(in crate::layout) fn snapshot_columns(&self) -> (Vec<SavedColumn<W::Id>>, usize) {
         let columns = self

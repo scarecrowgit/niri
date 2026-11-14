@@ -610,7 +610,14 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
         let tile_size = tile.tile_size();
 
+        // ashd: a pinned canvas window closes where it is on screen, not on the plane.
+        let pinned = self.is_pinned(id);
         self.start_close_animation_for_tile(renderer, snapshot, tile_size, tile_pos, blocker);
+        if pinned {
+            if let Some(closing) = self.closing_windows.last_mut() {
+                closing.set_pinned();
+            }
+        }
     }
 
     pub fn activate_window_without_raising(&mut self, id: &W::Id) -> bool {

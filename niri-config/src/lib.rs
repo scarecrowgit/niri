@@ -2295,6 +2295,17 @@ mod tests {
                         ),
                     },
                 ),
+                canvas_mode_switch: CanvasModeSwitchAnim(
+                    Animation {
+                        off: false,
+                        kind: Easing(
+                            EasingParams {
+                                duration_ms: 280,
+                                curve: EaseOutCubic,
+                            },
+                        ),
+                    },
+                ),
                 edge_reveal: EdgeRevealAnim(
                     Animation {
                         off: false,

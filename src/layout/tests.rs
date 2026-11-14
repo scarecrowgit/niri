@@ -19,6 +19,7 @@ mod canvas; // ashd
 mod decorations; // ashd
 mod fullscreen;
 mod fullscreen_ws; // ashd
+mod mode_switch; // ashd
 mod scratch; // ashd
 mod work_area; // ashd
 mod ws_by_index; // ashd

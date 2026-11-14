@@ -61,6 +61,9 @@ pub struct ClosingWindow {
 
     /// Random seed for the shader.
     random_seed: f32,
+
+    /// ashd: closing pinned canvas window (doesn't move with the plane).
+    pinned: bool,
 }
 
 niri_render_elements! {
@@ -154,6 +157,7 @@ impl ClosingWindow {
             blocked_out_buffer_offset,
             anim_state: AnimationState::new(blocker, anim),
             random_seed: fastrand::f32(),
+            pinned: false, // ashd
         })
     }
 
@@ -179,6 +183,15 @@ impl ClosingWindow {
     /// ashd: moves the closing window (canvas view panned under it).
     pub fn offset_pos(&mut self, delta: Point<f64, Logical>) {
         self.pos += delta;
+    }
+
+    /// ashd: a pinned canvas window stays on screen while the view pans.
+    pub fn set_pinned(&mut self) {
+        self.pinned = true;
+    }
+
+    pub fn is_pinned(&self) -> bool {
+        self.pinned
     }
 
     pub fn render(

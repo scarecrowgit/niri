@@ -19,12 +19,13 @@ use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::{FloatingActive, Workspace, WorkspaceAddWindowTarget, WorkspaceRenderElement};
+use crate::animation::Animation;
 use crate::input::swipe_tracker::SwipeTracker;
 use crate::layout::canvas::{
     bounding_box, compensated_frame_width, fit_transform, next_zoom_step, push_to_contain,
     rect_center, zoom_by_target, CanvasMemory, CanvasPanDirection, CanvasPanGesture,
-    CanvasTransform, CanvasView, CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN, CANVAS_FIT_PADDING,
-    CANVAS_TOUCHPAD_GESTURE_MOVEMENT,
+    CanvasTransform, CanvasView, ModeSwitch, CANVAS_CASCADE_STEP, CANVAS_EDGE_PUSH_MARGIN,
+    CANVAS_FIT_PADDING, CANVAS_TOUCHPAD_GESTURE_MOVEMENT,
 };
 use crate::layout::canvas_grid::CanvasDecorRenderElement;
 use crate::layout::scrolling::{Column, ColumnWidth, StripArrangement};
@@ -228,13 +229,17 @@ impl<W: LayoutElement> Workspace<W> {
             })
         };
 
-        // The view starts out showing exactly what is on screen: plane = view.
+        // The view starts out showing exactly what is on screen: plane = view (or, in the middle
+        // of a canvas → strip transition, the zoomed strip as it is drawn).
+        let start = match self.strip_transition_zoom() {
+            Some((zoom, anchor)) => CanvasTransform::new(anchor - anchor.downscale(zoom), zoom),
+            None => CanvasTransform::IDENTITY,
+        };
         self.canvas.mode = WorkspaceMode::Canvas;
         self.canvas.strip = Some(strip);
-        self.canvas.view.jump_to(CanvasTransform::IDENTITY);
+        self.canvas.view.jump_to(start);
         self.canvas.cascade = None;
-        self.floating
-            .set_canvas_mode(Some(CanvasTransform::IDENTITY));
+        self.floating.set_canvas_mode(Some(start));
 
         // Floating windows go back to where they were on the canvas last time.
         let floating_ids: Vec<W::Id> = self
@@ -276,12 +281,15 @@ impl<W: LayoutElement> Workspace<W> {
             self.floating.add_tile(removed.tile, false);
 
             if target.is_some() {
+                let config = self.options.animations.canvas_mode_switch.0;
                 let (tile, new_pos) = self
                     .floating
                     .tiles_with_render_positions_mut(false)
                     .find(|(tile, _)| tile.window().id() == &id)
                     .unwrap();
-                tile.animate_move_from(pos - new_pos);
+                // Same curve as the view: one coherent transition. `pos - offset` is where the
+                // window is drawn now in unscaled view coordinates.
+                tile.animate_move_from_with_config(pos - start.offset - new_pos, config);
             }
         }
 
@@ -310,7 +318,55 @@ impl<W: LayoutElement> Workspace<W> {
             (None, Some(memory)) => CanvasTransform::new(memory.transform.offset, zoom),
             (None, None) => CanvasTransform::IDENTITY.zoomed_around(center, zoom),
         };
-        self.canvas_animate_to(target, center);
+        self.canvas_animate_mode_switch(target, center, true, 1., CanvasTransform::IDENTITY);
+    }
+
+    /// Starts the strip ↔ canvas transition (see [`ModeSwitch`]); on a canvas the view goes to
+    /// `target` along the same curve.
+    fn canvas_animate_mode_switch(
+        &mut self,
+        target: CanvasTransform,
+        focus: Point<f64, Logical>,
+        to_canvas: bool,
+        from_zoom: f64,
+        decor_transform: CanvasTransform,
+    ) {
+        let config = self.options.animations.canvas_mode_switch.0;
+        if to_canvas && target.is_finite() {
+            let zoom = self.options.layout.canvas.clamp_zoom(target.zoom);
+            let target = CanvasTransform::new(target.offset, zoom);
+            self.canvas
+                .view
+                .animate_to(&self.clock, target, focus, config, config);
+            self.sync_canvas();
+        }
+        self.canvas.mode_switch = Some(ModeSwitch {
+            anim: Animation::new(self.clock.clone(), 0., 1., 0., config),
+            to_canvas,
+            from_zoom,
+            anchor: focus,
+            decor_transform,
+        });
+    }
+
+    /// Canvas → strip transition: the zoom the strip is drawn at and its anchor, while it differs
+    /// from 1.
+    pub fn strip_transition_zoom(&self) -> Option<(f64, Point<f64, Logical>)> {
+        let (zoom, anchor) = self.canvas.mode_switch.as_ref()?.strip_zoom()?;
+        ((zoom - 1.).abs() > 1e-6).then_some((zoom, anchor))
+    }
+
+    /// Opacity of the grid while the mode switch fades it in or out.
+    pub fn canvas_decor_alpha(&self) -> f32 {
+        self.canvas
+            .mode_switch
+            .as_ref()
+            .map_or(1., |m| m.decor_alpha() as f32)
+    }
+
+    /// Whether a mode switch animation is running.
+    pub fn is_mode_switch_ongoing(&self) -> bool {
+        self.canvas.mode_switch.is_some()
     }
 
     fn exit_canvas(&mut self) {
@@ -322,6 +378,13 @@ impl<W: LayoutElement> Workspace<W> {
         let active_id = self.active_window().map(|win| win.id().clone());
         let current = self.canvas.view.current();
         let target = self.canvas.view.target();
+        // Fullscreen / maximized windows were not drawn zoomed; don't zoom the strip then.
+        let from_zoom = if self.scrolling.is_empty() {
+            current.zoom
+        } else {
+            1.
+        };
+        let anchor = rect_center(self.working_area);
 
         // Remember the canvas layout for the next canvas session.
         let mut plane_positions: Vec<(W::Id, Point<f64, Logical>)> = self
@@ -428,13 +491,19 @@ impl<W: LayoutElement> Workspace<W> {
         }
         self.canvas_fix_floating_active();
 
-        // Animate from where the windows were drawn on the canvas.
+        // One transition: the strip is drawn zoomed from the canvas zoom to 1 around `anchor`
+        // while the windows move from where the canvas drew them along the same curve, so the
+        // first frame matches the canvas and the last one the strip.
+        self.scrolling.settle_view_offset();
+        self.canvas_animate_mode_switch(target, anchor, false, from_zoom, current);
+        let config = self.options.animations.canvas_mode_switch.0;
         for (tile, new_pos) in self.tiles_with_render_positions_mut(false) {
             if let Some((_, old)) = view_positions
                 .iter()
                 .find(|(id, _)| id == tile.window().id())
             {
-                tile.animate_move_from(*old - new_pos);
+                let from = anchor + (*old - anchor).downscale(from_zoom);
+                tile.animate_move_from_with_config(from - new_pos, config);
             }
         }
     }
@@ -635,6 +704,14 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Advances the canvas view animation and pushes the transform into the floating space.
     pub(super) fn canvas_advance_animations(&mut self) {
+        if self
+            .canvas
+            .mode_switch
+            .as_ref()
+            .is_some_and(|m| m.anim.is_done())
+        {
+            self.canvas.mode_switch = None;
+        }
         if !self.is_canvas() {
             return;
         }
@@ -913,12 +990,61 @@ impl<W: LayoutElement> Workspace<W> {
         focus_ring: bool,
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
-        let canvas = &self.options.layout.canvas;
         let zoom = self.canvas_zoom();
-        let alpha = canvas.title_label_alpha(zoom) as f32;
+        let alpha = self.options.layout.canvas.title_label_alpha(zoom)
+            * f64::from(self.canvas_decor_alpha());
+        let active = focus_ring
+            .then(|| self.floating.active_window())
+            .flatten()
+            .map(|win| win.id().clone());
+        let tiles = self
+            .floating
+            .tiles_with_render_positions()
+            .map(|(tile, pos)| (tile, pos.upscale(zoom), tile.tile_size().w * zoom));
+        self.push_title_labels(renderer, target, active, alpha as f32, tiles, push);
+    }
+
+    /// The canvas title labels while a canvas turns back into a strip: they follow the strip
+    /// zoom (and fade out with it).
+    pub(super) fn render_mode_switch_labels<R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        target: RenderTarget,
+        zoom: f64,
+        anchor: Point<f64, Logical>,
+        push: &mut dyn FnMut(WorkspaceRenderElement<R>),
+    ) {
+        let alpha = self.options.layout.canvas.title_label_alpha(zoom)
+            * f64::from(self.canvas_decor_alpha());
         if alpha <= 0. {
             return;
         }
+        let tiles = self
+            .scrolling
+            .tiles_with_render_positions()
+            .map(|(tile, pos, _)| {
+                let top_left = anchor + (pos - anchor).upscale(zoom);
+                (tile, top_left, tile.tile_size().w * zoom)
+            });
+        self.push_title_labels(renderer, target, None, alpha as f32, tiles, push);
+    }
+
+    /// Pushes title labels for `(tile, top-left in view, drawn width)`.
+    fn push_title_labels<'a, R: NiriRenderer>(
+        &self,
+        renderer: &mut R,
+        target: RenderTarget,
+        active: Option<W::Id>,
+        alpha: f32,
+        tiles: impl Iterator<Item = (&'a Tile<W>, Point<f64, Logical>, f64)>,
+        push: &mut dyn FnMut(WorkspaceRenderElement<R>),
+    ) where
+        W: 'a,
+    {
+        if alpha <= 0. {
+            return;
+        }
+        let canvas = &self.options.layout.canvas;
         let title_bar = &self.options.layout.title_bar;
         let style = LabelStyle {
             size: canvas.title_labels_size,
@@ -929,16 +1055,10 @@ impl<W: LayoutElement> Workspace<W> {
             text_color: self.options.layout.focus_ring.active_color,
             ..style
         };
-        let active = focus_ring
-            .then(|| self.floating.active_window())
-            .flatten()
-            .map(|win| win.id().clone());
         let view = Rectangle::from_size(self.view_size);
         let label_room = canvas.title_labels_size * 2. + LABEL_GAP;
 
-        for (tile, pos) in self.floating.tiles_with_render_positions() {
-            let top_left = pos.upscale(zoom);
-            let width = tile.tile_size().w * zoom;
+        for (tile, top_left, width) in tiles {
             let room = Rectangle::new(
                 top_left - Point::from((0., label_room)),
                 Size::from((width, label_room)),

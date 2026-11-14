@@ -175,6 +175,8 @@ niri_render_elements! {
         Canvas = crate::render_helpers::minify::MinifyRenderElement<
             RescaleRenderElement<FloatingSpaceRenderElement<R>>,
         >,
+        // ashd: the strip drawn zoomed while a canvas turns back into it.
+        StripZoom = RescaleRenderElement<ScrollingSpaceRenderElement<R>>,
         // ashd: canvas plane grid and regions.
         CanvasDecor = CanvasDecorRenderElement,
         // ashd: working area outline and corner masks.
@@ -421,12 +423,14 @@ impl<W: LayoutElement> Workspace<W> {
         self.scrolling.are_animations_ongoing()
             || self.floating.are_animations_ongoing()
             || self.canvas.view.is_animating() // ashd
+            || self.canvas.mode_switch.is_some() // ashd
     }
 
     pub fn are_transitions_ongoing(&self) -> bool {
         self.scrolling.are_transitions_ongoing()
             || self.floating.are_transitions_ongoing()
             || self.canvas.view.is_animating() // ashd: no pointer refocus while panning
+            || self.canvas.mode_switch.is_some() // ashd
     }
 
     pub fn update_render_elements(&mut self, is_active: bool, layer: RenderLayer) {
@@ -1778,13 +1782,29 @@ impl<W: LayoutElement> Workspace<W> {
         push: &mut dyn FnMut(WorkspaceRenderElement<R>),
     ) {
         let scrolling_focus_ring = focus_ring && !self.floating_is_active();
-        self.scrolling.render(
-            ctx.r(),
-            xray_pos,
-            scrolling_focus_ring,
-            layer,
-            &mut |elem| push(elem.into()),
-        );
+        // ashd: canvas → strip transition.
+        if let Some((zoom, anchor)) = self.strip_transition_zoom() {
+            let origin = anchor.to_physical_precise_round(self.scale.fractional_scale());
+            self.render_mode_switch_labels(ctx.renderer, ctx.target, zoom, anchor, push);
+            self.scrolling.render(
+                ctx.r(),
+                xray_pos,
+                scrolling_focus_ring,
+                layer,
+                &mut |elem| {
+                    let elem = RescaleRenderElement::from_element(elem, origin, zoom);
+                    push(WorkspaceRenderElement::StripZoom(elem))
+                },
+            );
+        } else {
+            self.scrolling.render(
+                ctx.r(),
+                xray_pos,
+                scrolling_focus_ring,
+                layer,
+                &mut |elem| push(elem.into()),
+            );
+        }
 
         // ashd: canvas plane grid and regions under all windows.
         if layer.is_normal() {
@@ -1811,6 +1831,23 @@ impl<W: LayoutElement> Workspace<W> {
 
         let view_rect = Rectangle::from_size(self.view_size);
         let floating_focus_ring = focus_ring && self.floating_is_active();
+        // ashd: canvas → strip transition.
+        if let Some((zoom, anchor)) = self.strip_transition_zoom() {
+            let origin = anchor.to_physical_precise_round(self.scale.fractional_scale());
+            self.floating.render(
+                ctx,
+                xray_pos,
+                view_rect,
+                floating_focus_ring,
+                layer,
+                &mut |elem| {
+                    let elem = RescaleRenderElement::from_element(elem, origin, zoom);
+                    let elem = crate::render_helpers::minify::MinifyRenderElement::new(elem, false);
+                    push(WorkspaceRenderElement::Canvas(elem))
+                },
+            );
+            return;
+        }
         self.floating.render(
             ctx,
             xray_pos,

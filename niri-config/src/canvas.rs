@@ -47,7 +47,7 @@
 use knuffel::errors::DecodeError;
 pub use niri_ipc::WorkspaceMode;
 
-use crate::animations::{Animation, Kind, SpringParams};
+use crate::animations::{Animation, Curve, EasingParams, Kind, SpringParams};
 use crate::utils::MergeWith;
 use crate::FloatOrInt;
 
@@ -233,6 +233,38 @@ impl Default for CanvasPanAnim {
                 epsilon: 0.0001,
             }),
         })
+    }
+}
+
+/// Animation of the strip ↔ canvas mode switch: windows travel between their strip and canvas
+/// positions while the view zoom changes along, the grid fades in or out.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CanvasModeSwitchAnim(pub Animation);
+
+impl Default for CanvasModeSwitchAnim {
+    fn default() -> Self {
+        Self(Animation {
+            off: false,
+            kind: Kind::Easing(EasingParams {
+                duration_ms: 280,
+                curve: Curve::EaseOutCubic,
+            }),
+        })
+    }
+}
+
+impl<S> knuffel::Decode<S> for CanvasModeSwitchAnim
+where
+    S: knuffel::traits::ErrorSpan,
+{
+    fn decode_node(
+        node: &knuffel::ast::SpannedNode<S>,
+        ctx: &mut knuffel::decode::Context<S>,
+    ) -> Result<Self, DecodeError<S>> {
+        let default = Self::default().0;
+        Ok(Self(Animation::decode_node(node, ctx, default, |_, _| {
+            Ok(false)
+        })?))
     }
 }
 

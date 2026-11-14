@@ -571,6 +571,53 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) decor: super::canvas_grid::CanvasDecorations,
     /// ashd: working area outline and clip (not canvas-specific; per-workspace ashd state).
     pub(super) work_area: super::work_area::WorkAreaDecor,
+    /// Ongoing strip ↔ canvas mode switch.
+    pub(super) mode_switch: Option<ModeSwitch>,
+}
+
+/// An ongoing strip ↔ canvas mode switch (`animations { canvas-mode-switch }`).
+///
+/// Strip → canvas: the windows start at their strip positions on a plane shown at zoom 1, the
+/// view (offset and zoom) and the windows going to remembered plane positions follow this one
+/// animation, the grid fades in.
+///
+/// Canvas → strip: the strip is drawn scaled by `zoom(t)` = `from_zoom` → 1 around `anchor`
+/// (view coordinates), with the windows moving from where the canvas drew them (divided by the
+/// zoom around the anchor) to their columns along the same curve; the grid and the title
+/// labels fade out.
+#[derive(Debug)]
+pub struct ModeSwitch {
+    pub(super) anim: Animation,
+    pub(super) to_canvas: bool,
+    pub(super) from_zoom: f64,
+    pub(super) anchor: Point<f64, Logical>,
+    /// Canvas transform the grid is drawn with while it fades out.
+    pub(super) decor_transform: CanvasTransform,
+}
+
+impl ModeSwitch {
+    /// Eased progress, 0 → 1.
+    pub fn progress(&self) -> f64 {
+        self.anim.value().clamp(0., 1.)
+    }
+
+    /// Canvas → strip: the zoom the strip is drawn at and the anchor of the zoom.
+    pub fn strip_zoom(&self) -> Option<(f64, Point<f64, Logical>)> {
+        if self.to_canvas {
+            return None;
+        }
+        let p = self.progress();
+        Some((self.from_zoom + (1. - self.from_zoom) * p, self.anchor))
+    }
+
+    /// Opacity of the grid, regions and canvas title labels.
+    pub fn decor_alpha(&self) -> f64 {
+        if self.to_canvas {
+            self.progress()
+        } else {
+            1. - self.progress()
+        }
+    }
 }
 
 /// State of a direct-manipulation pan of a canvas view.
@@ -600,6 +647,7 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             zoom_gesture: None,
             decor: Default::default(),     // ashd
             work_area: Default::default(), // ashd
+            mode_switch: None,
         }
     }
 }
