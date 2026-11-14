@@ -165,7 +165,15 @@ impl<W: LayoutElement> FloatingSpace<W> {
 
     /// Updates the view transform (every frame while the canvas view animates).
     pub fn set_canvas_transform(&mut self, transform: CanvasTransform) {
-        if self.canvas.is_some() {
+        if let Some(old) = self.canvas {
+            // Closing windows stay where they were on the plane while the view pans: they are
+            // positioned in unscaled view coordinates, `plane - offset`.
+            let shift = old.offset - transform.offset;
+            if shift != Point::from((0., 0.)) {
+                for closing in &mut self.closing_windows {
+                    closing.offset_pos(shift);
+                }
+            }
             self.canvas = Some(transform);
         }
     }

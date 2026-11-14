@@ -364,3 +364,63 @@ fn canvas_regions_runtime_changes() {
     let ws = layout.active_workspace().unwrap();
     assert_eq!(ws.canvas_visible_region_names(), ["near"]);
 }
+
+// rice: window-rule border widths are compensated under the canvas zoom like the layout ones.
+#[test]
+fn canvas_compensates_window_rule_border_width() {
+    let mut options = Options::default();
+    options.layout.border.off = true;
+    options.layout.canvas.default_zoom = 0.5;
+    options.layout.canvas.zoom_steps = vec![0.5, 1.];
+    let rule_window = Op::AddWindow {
+        params: TestWindowParams {
+            rules: Some(ResolvedWindowRules {
+                border: niri_config::BorderRule {
+                    on: true,
+                    width: Some(FloatOrInt(1.)),
+                    ..Default::default()
+                },
+                ..ResolvedWindowRules::default()
+            }),
+            ..TestWindowParams::new(1)
+        },
+    };
+    let mut ops = vec![Op::AddOutput(1), rule_window];
+    ops.extend(settle(1));
+    ops.push(Op::ToggleWorkspaceMode);
+    ops.extend(settle(1));
+    let layout = check_ops_with_options(options, ops);
+    assert_eq!(layout.active_workspace().unwrap().canvas_zoom(), 0.5);
+    // One physical pixel at zoom 0.5 needs a 2 px border on the plane.
+    assert_eq!(tile(&layout, 1).effective_border_width(), Some(2.));
+}
+
+// rice: the tab indicator sits outside a focus ring with a gap.
+#[test]
+fn tab_indicator_moves_out_past_the_ring_gap() {
+    let mut options = Options::default();
+    options.layout.focus_ring.gap = 4.;
+    options.layout.focus_ring.width = 1.;
+    options.layout.tab_indicator.gap = 5.;
+    options.layout.tab_indicator.place_within_column = true;
+    let ops = [
+        Op::AddOutput(1),
+        window(1),
+        window(2),
+        Op::ConsumeOrExpelWindowLeft { id: None },
+        Op::ToggleColumnTabbedDisplay,
+        Op::CompleteAnimations,
+    ];
+    let with_gap = check_ops_with_options(options.clone(), ops.clone());
+    options.layout.focus_ring.gap = 0.;
+    let without_gap = check_ops_with_options(options, ops);
+    // The tiles make room for the indicator plus the ring's gap and width.
+    let x = |layout: &Layout<TestWindow>| {
+        let ws = layout.active_workspace().unwrap();
+        ws.tiles_with_render_positions()
+            .find(|(tile, _, _)| tile.window().0.id == 2)
+            .map(|(_, pos, _)| pos.x)
+            .unwrap()
+    };
+    assert_eq!(x(&with_gap) - x(&without_gap), 5.);
+}

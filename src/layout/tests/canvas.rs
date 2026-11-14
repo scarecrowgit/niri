@@ -1103,3 +1103,107 @@ fn title_strip_hit_through_zoom() {
     let below = rect.loc + Point::from((5., rect.size.h + 1.));
     assert!(ws(&layout).window_under(below).is_none());
 }
+
+// rice: the moved tile's zoom animates when it crosses to a workspace with another zoom.
+#[test]
+fn interactive_move_zoom_animates_between_canvas_and_strip() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        Op::AddOutput(2),
+        Op::FocusOutput(1),
+        window(1),
+        window(2),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let zoom = transform(&layout).zoom;
+    assert!(zoom < 1.);
+
+    let start = rect_center(view_rect(&layout, 2));
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::InteractiveMoveBegin {
+                window: 2,
+                output_idx: 1,
+                px: start.x,
+                py: start.y,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 2,
+                dx: 300.,
+                dy: 0.,
+                output_idx: 1,
+                px: start.x + 300.,
+                py: start.y,
+            },
+            Op::InteractiveMoveUpdate {
+                window: 2,
+                dx: 0.,
+                dy: 0.,
+                output_idx: 1,
+                px: start.x + 300.,
+                py: start.y,
+            },
+        ],
+    );
+    let state = |layout: &Layout<TestWindow>| match &layout.interactive_move {
+        Some(InteractiveMoveState::Moving(move_)) => (
+            layout.interactive_move_canvas_zoom(move_),
+            move_.canvas_zoom.is_animating(),
+        ),
+        other => panic!("expected an ongoing move, got {other:?}"),
+    };
+    assert_eq!(state(&layout), (zoom, false));
+
+    // Over the strip workspace of output 2: animates towards 1 from the canvas zoom.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::InteractiveMoveUpdate {
+            window: 2,
+            dx: 10.,
+            dy: 0.,
+            output_idx: 2,
+            px: 100.,
+            py: 100.,
+        }],
+    );
+    let (value, animating) = state(&layout);
+    assert!(animating);
+    assert_abs_diff_eq!(value, zoom, epsilon = 1e-6);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(state(&layout), (1., false));
+    check_ops_on_layout(&mut layout, [Op::InteractiveMoveEnd { window: 2 }]);
+}
+
+// rice: moving a canvas window to another workspace animates from where it is drawn.
+#[test]
+fn move_to_workspace_animates_from_the_drawn_position() {
+    let mut layout = check_ops([
+        Op::AddOutput(1),
+        window(1),
+        window(2),
+        Op::ToggleWorkspaceMode,
+        Op::CompleteAnimations,
+    ]);
+    let zoom = transform(&layout).zoom;
+    assert!(zoom < 1.);
+    let drawn = view_rect(&layout, 2).loc;
+
+    check_ops_on_layout(&mut layout, [Op::MoveWindowToWorkspaceDown(false)]);
+    let mon = layout.monitors().next().unwrap();
+    // One workspace (view height plus the gap between workspaces) up.
+    let height = mon.view_size().h;
+    let target = &mon.workspaces[1];
+    assert!(!target.is_canvas());
+    let (_, pos, _) = target
+        .tiles_with_render_positions()
+        .find(|(tile, _, _)| tile.window().0.id == 2)
+        .unwrap();
+    // At the start of the animation the tile is where it was drawn on the canvas, one workspace
+    // up.
+    assert_abs_diff_eq!(pos.x, drawn.x, epsilon = 1.);
+    assert!(pos.y <= drawn.y - height, "{pos:?} vs {drawn:?}");
+    assert!(pos.y >= drawn.y - 1.5 * height, "{pos:?} vs {drawn:?}");
+}

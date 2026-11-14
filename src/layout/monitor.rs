@@ -875,6 +875,8 @@ impl<W: LayoutElement> Monitor<W> {
             .tiles_with_render_positions()
             .find_map(|(tile, offset, _visible)| (tile.window().id() == &window).then_some(offset))
             .unwrap();
+        // rice: canvas tiles report unscaled positions; animate from where it is drawn.
+        old_render_pos = old_render_pos.upscale(canvas_tile_zoom(workspace, &window));
 
         let transaction = Transaction::new();
         let removed = workspace.remove_tile(&window, transaction);
@@ -926,11 +928,16 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
 
+        // rice: on a canvas, the tile offset is drawn scaled by the canvas zoom.
+        let new_zoom = canvas_tile_zoom(&self.workspaces[new_idx], &window);
         let (tile, new_render_pos) = self.workspaces[new_idx]
             .tiles_with_render_positions_mut(false)
             .find(|(tile, _)| tile.window().id() == &window)
             .unwrap();
-        tile.animate_move_from_with_config(old_render_pos - new_render_pos, config);
+        tile.animate_move_from_with_config(
+            old_render_pos.downscale(new_zoom) - new_render_pos,
+            config,
+        );
         tile.set_anim_y_between_workspaces();
     }
 
@@ -2458,5 +2465,15 @@ impl<W: LayoutElement> Monitor<W> {
             assert_abs_diff_eq!(pos.x, rounded_pos.x, epsilon = 1e-5);
             assert_abs_diff_eq!(pos.y, rounded_pos.y, epsilon = 1e-5);
         }
+    }
+}
+
+/// rice: the zoom a tile of `ws` is drawn at: the canvas zoom for windows on a canvas plane, 1 for
+/// everything else (strip tiles, fullscreen/maximized windows of a canvas workspace).
+fn canvas_tile_zoom<W: LayoutElement>(ws: &Workspace<W>, window: &W::Id) -> f64 {
+    if ws.is_canvas() && ws.is_floating(window) {
+        ws.canvas_zoom()
+    } else {
+        1.
     }
 }

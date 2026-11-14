@@ -465,6 +465,8 @@ struct InteractiveMoveData<W: LayoutElement> {
     /// config overrides for the workspace where the move originated from. As soon as the window
     /// moves over some different workspace though, this override will reset.
     pub(self) workspace_config: Option<(WorkspaceId, niri_config::LayoutPart)>,
+    /// rice: zoom the tile is drawn at (the zoom of the canvas under the pointer, animated).
+    pub(self) canvas_zoom: canvas::MoveZoom,
 }
 
 #[derive(Debug)]
@@ -2713,6 +2715,7 @@ impl<W: LayoutElement> Layout<W> {
 
         if let Some(InteractiveMoveState::Moving(move_)) = &mut self.interactive_move {
             move_.tile.advance_animations();
+            move_.canvas_zoom.advance(); // rice
 
             if dnd_scroll.is_none() {
                 dnd_scroll = Some((
@@ -2849,7 +2852,8 @@ impl<W: LayoutElement> Layout<W> {
 
         if let Some(InteractiveMoveState::Moving(move_)) = &self.interactive_move {
             if output.is_none_or(|output| *output == move_.output) {
-                if move_.tile.are_animations_ongoing() {
+                // rice: also while its zoom animates.
+                if move_.tile.are_animations_ongoing() || move_.canvas_zoom.is_animating() {
                     return true;
                 }
 
@@ -4164,7 +4168,11 @@ impl<W: LayoutElement> Layout<W> {
                     pointer_ratio_within_window,
                     output_config,
                     workspace_config,
+                    canvas_zoom: canvas::MoveZoom::default(), // rice
                 };
+                // rice: starts at the zoom of the workspace it is on, without animation.
+                data.canvas_zoom =
+                    canvas::MoveZoom::settled(self.interactive_move_canvas_zoom_target(&data));
 
                 if let Some((tile_pos, zoom)) = tile_pos {
                     // rice: the tile is drawn at the zoom of the workspace under the pointer.
@@ -4227,6 +4235,7 @@ impl<W: LayoutElement> Layout<W> {
                 }
 
                 move_.pointer_pos_within_output = pointer_pos_within_output;
+                self.interactive_move_retarget_zoom(&mut move_); // rice
 
                 self.interactive_move = Some(InteractiveMoveState::Moving(move_));
             }
@@ -4288,7 +4297,7 @@ impl<W: LayoutElement> Layout<W> {
         let Some(InteractiveMoveState::Moving(mut move_)) = self.interactive_move.take() else {
             unreachable!()
         };
-        let move_canvas_zoom = self.interactive_move_canvas_zoom(&move_); // rice
+        let move_canvas_zoom = self.interactive_move_canvas_zoom_target(&move_); // rice
 
         for mon in self.monitors_mut() {
             mon.dnd_scroll_gesture_end();

@@ -176,6 +176,11 @@ impl ClosingWindow {
         }
     }
 
+    /// rice: moves the closing window (canvas view panned under it).
+    pub fn offset_pos(&mut self, delta: Point<f64, Logical>) {
+        self.pos += delta;
+    }
+
     pub fn render(
         &self,
         ctx: RenderCtx<GlesRenderer>,

@@ -781,7 +781,35 @@ impl<W: LayoutElement> Layout<W> {
 
     /// Canvas zoom of the workspace that an interactively moved tile is over (1 elsewhere): the
     /// tile is drawn at that zoom so that it lands exactly where it is dropped.
+    /// Zoom the interactively moved tile is drawn and hit-tested at right now (animated between
+    /// the zooms of the workspaces it moves over).
     pub(super) fn interactive_move_canvas_zoom(&self, move_: &InteractiveMoveData<W>) -> f64 {
+        move_.canvas_zoom.value()
+    }
+
+    /// Starts animating the moved tile's zoom when the workspace under the pointer changed to
+    /// one with a different zoom (canvas ↔ strip, or two canvases at different zooms).
+    pub(super) fn interactive_move_retarget_zoom(&self, move_: &mut InteractiveMoveData<W>) {
+        let target = self.interactive_move_canvas_zoom_target(move_);
+        if target == move_.canvas_zoom.target {
+            return;
+        }
+        let from = move_.canvas_zoom.value();
+        move_.canvas_zoom.target = target;
+        move_.canvas_zoom.anim = Some(Animation::new(
+            self.clock.clone(),
+            from,
+            target,
+            0.,
+            self.options.animations.canvas_zoom.0,
+        ));
+    }
+
+    /// Zoom of the workspace under the pointer of an interactive move (1 off canvases).
+    pub(super) fn interactive_move_canvas_zoom_target(
+        &self,
+        move_: &InteractiveMoveData<W>,
+    ) -> f64 {
         let Some(mon) = self.monitor_for_output(&move_.output) else {
             return 1.;
         };
@@ -793,6 +821,47 @@ impl<W: LayoutElement> Layout<W> {
             .iter()
             .find(|ws| ws.id() == id)
             .map_or(1., |ws| ws.canvas_zoom())
+    }
+}
+
+/// rice: zoom of an interactively moved tile, animated when it moves between workspaces with
+/// different zooms.
+#[derive(Debug)]
+pub struct MoveZoom {
+    pub(super) target: f64,
+    pub(super) anim: Option<Animation>,
+}
+
+impl Default for MoveZoom {
+    fn default() -> Self {
+        Self::settled(1.)
+    }
+}
+
+impl MoveZoom {
+    pub fn settled(zoom: f64) -> Self {
+        Self {
+            target: zoom,
+            anim: None,
+        }
+    }
+
+    pub fn value(&self) -> f64 {
+        match &self.anim {
+            Some(anim) if !anim.is_done() => anim.value().max(0.01),
+            _ => self.target,
+        }
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.anim.as_ref().is_some_and(|anim| !anim.is_done())
+    }
+
+    /// Drops the animation once it is done.
+    pub fn advance(&mut self) {
+        if self.anim.as_ref().is_some_and(Animation::is_done) {
+            self.anim = None;
+        }
     }
 }
 

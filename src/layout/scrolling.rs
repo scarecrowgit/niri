@@ -510,7 +510,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .unwrap_or(self.options.layout.default_column_display);
         let will_tab = display_mode == ColumnDisplay::Tabbed;
         let extra_size = if will_tab {
-            TabIndicator::new(self.options.layout.tab_indicator).extra_size(1, self.scale)
+            TabIndicator::new(tab_indicator_config(&self.options)).extra_size(1, self.scale)
         } else {
             Size::from((0., 0.))
         };
@@ -536,7 +536,7 @@ impl<W: LayoutElement> ScrollingSpace<W> {
             .unwrap_or(self.options.layout.default_column_display);
         let will_tab = display_mode == ColumnDisplay::Tabbed;
         let extra = if will_tab {
-            TabIndicator::new(self.options.layout.tab_indicator).extra_size(1, self.scale)
+            TabIndicator::new(tab_indicator_config(&self.options)).extra_size(1, self.scale)
         } else {
             Size::from((0., 0.))
         };
@@ -4070,7 +4070,7 @@ impl<W: LayoutElement> Column<W> {
             is_pending_maximized: false,
             is_pending_fullscreen: false,
             display_mode,
-            tab_indicator: TabIndicator::new(options.layout.tab_indicator),
+            tab_indicator: TabIndicator::new(tab_indicator_config(&options)),
             move_x_animation: None,
             move_y_animation: None,
             view_size,
@@ -4148,7 +4148,7 @@ impl<W: LayoutElement> Column<W> {
             update_sizes = true;
         }
 
-        if self.options.layout.tab_indicator != options.layout.tab_indicator {
+        if tab_indicator_config(&self.options) != tab_indicator_config(&options) {
             update_sizes = true;
         }
 
@@ -4168,7 +4168,7 @@ impl<W: LayoutElement> Column<W> {
         }
 
         self.tab_indicator
-            .update_config(options.layout.tab_indicator);
+            .update_config(tab_indicator_config(&options));
         self.view_size = view_size;
         self.working_area = working_area;
         self.parent_area = parent_area;
@@ -5686,6 +5686,17 @@ fn compute_new_view_offset(
     } else {
         -(view_width - padding - new_col_width)
     }
+}
+
+/// rice: the tab indicator config, moved outwards past a focus ring with a gap (the ring goes
+/// around the tile grown by the gap, so the indicator would sit inside the ring otherwise).
+fn tab_indicator_config(options: &Options) -> niri_config::TabIndicator {
+    let mut config = options.layout.tab_indicator;
+    let ring = &options.layout.focus_ring;
+    if !ring.off && ring.gap > 0. && config.gap >= 0. {
+        config.gap += ring.gap + ring.width;
+    }
+    config
 }
 
 fn compute_working_area(

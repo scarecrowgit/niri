@@ -8,6 +8,7 @@ use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::utils::{Logical, Point, Rectangle, Scale, Size};
 
+use super::canvas::compensated_frame_width; // rice
 use super::focus_ring::{FocusRing, FocusRingRenderElement};
 use super::opening_window::{OpenAnimation, OpeningWindowRenderElement};
 use super::shadow::Shadow;
@@ -201,7 +202,7 @@ impl<W: LayoutElement> Tile<W> {
         let rules = window.rules();
         let mut border_config = options.layout.border.merged_with(&rules.border);
         let mut focus_ring_config = options.layout.focus_ring.merged_with(&rules.focus_ring);
-        apply_canvas_focus_style(&options, &mut border_config, &mut focus_ring_config); // rice
+        apply_canvas_focus_style(&options, scale, &mut border_config, &mut focus_ring_config); // rice
         let shadow_config = options.layout.shadow.merged_with(&rules.shadow);
         let sizing_mode = window.sizing_mode();
         let fullscreen_backdrop_color = options.layout.fullscreen_backdrop_color;
@@ -276,7 +277,12 @@ impl<W: LayoutElement> Tile<W> {
             .focus_ring
             .merged_with(&rules.focus_ring);
         // rice: canvas focus style, focus ring gap and title strip.
-        apply_canvas_focus_style(&self.options, &mut border_config, &mut focus_ring_config);
+        apply_canvas_focus_style(
+            &self.options,
+            self.scale,
+            &mut border_config,
+            &mut focus_ring_config,
+        );
         focus_ring_config.gap = round_logical_in_physical(self.scale, focus_ring_config.gap);
         self.title_bar.update_config(
             &self.options.layout.title_bar,
@@ -445,7 +451,12 @@ impl<W: LayoutElement> Tile<W> {
             .focus_ring
             .merged_with(&rules.focus_ring);
         // rice: canvas focus style, focus ring gap and title strip.
-        apply_canvas_focus_style(&self.options, &mut border_config, &mut focus_ring_config);
+        apply_canvas_focus_style(
+            &self.options,
+            self.scale,
+            &mut border_config,
+            &mut focus_ring_config,
+        );
         focus_ring_config.gap = round_logical_in_physical(self.scale, focus_ring_config.gap);
         self.title_bar.update_config(
             &self.options.layout.title_bar,
@@ -1765,13 +1776,22 @@ impl<W: LayoutElement> Tile<W> {
 
 /// rice: on canvas workspaces, `focus-ring { canvas-style }` can replace the focus ring by the
 /// window border in the ring's active colour, or hide it.
+///
+/// Below zoom 1, border and ring widths (also the ones from window rules) are widened so that they
+/// stay at least one physical pixel wide at the settled zoom.
 fn apply_canvas_focus_style(
     options: &Options,
+    scale: f64,
     border: &mut niri_config::Border,
     focus_ring: &mut niri_config::FocusRing,
 ) {
-    if options.canvas_tile_zoom.is_none() {
+    let Some(zoom) = options.canvas_tile_zoom else {
         return;
+    };
+
+    if zoom < 1. {
+        border.width = compensated_frame_width(border.width, zoom, scale);
+        focus_ring.width = compensated_frame_width(focus_ring.width, zoom, scale);
     }
 
     match focus_ring.canvas_style {
