@@ -1478,8 +1478,8 @@ pixel grid that is not the one they end up on.
   shader. `smooth-zoom-out false` still means plain bilinear everywhere.
 - **Misbehaving clients**: Chromium/Electron (tested: Obsidian 1.13, Electron) answer a scale
   below 1 by shrinking their window (800×650 → 608×509) and drawing without a viewport
-  destination. A window that changes its own size within 2 s after its scale changed (a size
-  niri did not request) is marked (`Mapped::check_scale_resize`, logged as a warning) and keeps
+  destination. A window that changes its own size within 2 s after its scale changed, while
+  niri requested no other size in between, is marked (`Mapped::check_scale_resize`, logged as a warning) and keeps
   the output scale from then on; Chromium then restores its size by itself. The shrunken window
   can be visible for a frame or two. The window rule `rescale-on-canvas false` opts a window out
   up front.
@@ -1528,7 +1528,11 @@ event; until then the old buffer is shown through the kernel, the window rectang
 change (frame sequence in `wt/evidence-crisp/wheel-sequence/`). kitty itself shows its old glyph
 size in the new buffer for ~25 ms (one or two frames) while it reloads fonts — client
 behaviour. Terminals may reflow by a column when the cell width rounds differently. The
-interactive-move tile is not snapped (drawn through the box filter while dragged).
+interactive-move tile is not snapped (drawn through the box filter while dragged). The filter
+switches from the box filter to the kernel when the zoom comes to rest; a pinch that ends
+exactly on the scale grid changes nothing that the damage tracker sees, so a non-following
+window keeps the box filter until it next repaints. Snapping applies to textures of at least
+8×8 px (solid colours and shaders report a 1×1 source and are never snapped).
 
 ### Files
 

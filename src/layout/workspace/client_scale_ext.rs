@@ -98,9 +98,10 @@ impl<W: LayoutElement> Workspace<W> {
 
     /// Scale for a window of (or being added to) this workspace.
     pub(super) fn current_client_scale(&self, window: &W) -> output::Scale {
+        // A window in transit gets what a new window gets in its initial configure: the zoomed
+        // scale if the zoom has settled, else the output scale (not whatever it had before, which
+        // may be another canvas's zoom or another output's scale).
         self.client_scale_target(window)
-            .or_else(|| window.preferred_scale_transform().map(|(s, _)| s))
-            // A new window got `new_canvas_window_scale()` in its initial configure.
             .unwrap_or_else(|| self.new_canvas_window_scale())
     }
 

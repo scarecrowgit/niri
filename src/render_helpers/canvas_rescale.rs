@@ -10,10 +10,10 @@
 //! compositor (or the double rounding at fractional output scales) would be stretched by one
 //! pixel over its width, which blurs every column where the sample phase crosses half a texel.
 //!
-//! Only elements whose source size differs from their unscaled size are snapped (textures that
-//! are already resampled at the output scale): solid colours, shaders and buffers rendered for
-//! the output scale keep the plain rescaled geometry, so frames and backgrounds line up as
-//! before. The position is the rescaled, rounded position in either case.
+//! Only textures whose source size differs from their unscaled size are snapped (textures that
+//! are already resampled at the output scale): solid colours and shaders (whose source is 1x1)
+//! and buffers rendered for the output scale keep the plain rescaled geometry, so frames and
+//! backgrounds line up as before. The position is the rescaled, rounded position in either case.
 
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
@@ -24,6 +24,9 @@ use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Size, Transform}
 /// Largest difference (physical pixels per axis) between the rescaled size and the source size
 /// that is snapped to the source size.
 pub const SNAP_TOLERANCE: f64 = 1.0;
+
+/// Smallest source size (buffer px, per axis) of an element that is snapped.
+pub const MIN_SNAP_SOURCE: f64 = 8.0;
 
 #[derive(Debug)]
 pub struct CanvasRescaleElement<E> {
@@ -91,6 +94,11 @@ pub fn snapped_size(
     rescaled: Size<i32, Physical>,
     src: Size<f64, Buffer>,
 ) -> Size<i32, Physical> {
+    // Solid colours and shader elements report a 1x1 source; only real textures and buffers
+    // (at least MIN_SNAP_SOURCE px on both axes) are snapped.
+    if !(src.w >= MIN_SNAP_SOURCE && src.h >= MIN_SNAP_SOURCE) {
+        return rescaled;
+    }
     let axis = |unscaled: i32, rescaled: i32, src: f64| {
         let integral = src.is_finite() && src > 0. && (src - src.round()).abs() < 1e-6;
         let resampled = (src - f64::from(unscaled)).abs() > 0.5;
@@ -257,6 +265,15 @@ mod tests {
         assert_eq!(
             snapped_size(size(800, 600), size(720, 540), Size::from((720.5, 540.))),
             size(720, 540)
+        );
+    }
+
+    #[test]
+    fn solid_colours_and_shaders_are_not_snapped() {
+        // A 4 px wide border segment at zoom 0.5 stays 2 px wide (its source is 1x1).
+        assert_eq!(
+            snapped_size(size(4, 600), size(2, 300), Size::from((1., 1.))),
+            size(2, 300)
         );
     }
 

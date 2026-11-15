@@ -104,8 +104,9 @@ pub struct Mapped {
     /// output's on a zoomed canvas).
     preferred_scale_transform: Cell<Option<(output::Scale, Transform)>>,
 
-    /// ashd: when the preferred scale last changed, and the window size at that time.
-    scale_change: Cell<Option<(Instant, Size<i32, Logical>)>>,
+    /// ashd: when the preferred scale last changed, the window size and the size requested
+    /// from it at that time.
+    scale_change: Cell<Option<ScaleChange>>,
 
     /// ashd: the window resized itself in response to a scale change (Chromium/Electron below
     /// scale 1), so it keeps the output scale on zoomed canvases.
@@ -221,6 +222,14 @@ static MAPPED_ID_COUNTER: IdCounter = IdCounter::new();
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct MappedId(u64);
+
+/// ashd: a change of a window's preferred scale, see [`Mapped::check_scale_resize`].
+#[derive(Debug, Clone, Copy)]
+struct ScaleChange {
+    at: Instant,
+    size: Size<i32, Logical>,
+    requested: Option<Size<i32, Logical>>,
+}
 
 impl MappedId {
     pub fn next() -> MappedId {
@@ -428,20 +437,22 @@ impl Mapped {
         /// How long after a scale change a resize counts as a reaction to it.
         const WINDOW: Duration = Duration::from_secs(2);
 
-        let Some((at, size)) = self.scale_change.get() else {
+        let Some(change) = self.scale_change.get() else {
             return false;
         };
-        if at.elapsed() > WINDOW {
+        if change.at.elapsed() > WINDOW {
             self.scale_change.set(None);
             return false;
         }
         let current = self.window.geometry().size;
-        if current == size || self.resizes_on_scale_change.get() {
+        if current == change.size || self.resizes_on_scale_change.get() {
             return false;
         }
-        // A size we asked for is not the client's own doing.
+        // Any size requested since the scale change (interactive resize, fullscreen, ...) can
+        // explain the new size: then it is not the client's own doing.
         let requested = self.requested_size();
-        if requested.is_some_and(|r| r == current) {
+        if requested != change.requested || requested.is_some_and(|r| r == current) {
+            self.scale_change.set(None);
             return false;
         }
         self.scale_change.set(None);
@@ -983,8 +994,11 @@ impl LayoutElement for Mapped {
             .preferred_scale_transform
             .replace(Some((scale, transform)));
         if previous.is_some_and(|(p, _)| p.fractional_scale() != scale.fractional_scale()) {
-            self.scale_change
-                .set(Some((Instant::now(), self.window.geometry().size)));
+            self.scale_change.set(Some(ScaleChange {
+                at: Instant::now(),
+                size: self.window.geometry().size,
+                requested: self.requested_size(),
+            }));
         }
         self.window.with_surfaces(|surface, data| {
             send_scale_transform(surface, data, scale, transform);

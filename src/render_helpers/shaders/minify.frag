@@ -75,7 +75,12 @@ vec4 niri_sharp_sample(vec2 coords) {
             if (ox > h.x)
                 break;
             float w = niri_cr((ox - f.x) * inv_k.x) * wy;
-            sum += w * texture2D(tex, (base + vec2(ox, oy) + 0.5) / size);
+            vec4 texel = texture2D(tex, (base + vec2(ox, oy) + 0.5) / size);
+#if defined(NO_ALPHA)
+            // XRGB: the X byte is undefined; the clamp below must not see it.
+            texel.a = 1.0;
+#endif
+            sum += w * texel;
             wsum += w;
         }
     }
