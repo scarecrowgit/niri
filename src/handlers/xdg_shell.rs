@@ -1272,10 +1272,11 @@ impl State {
             match popup {
                 PopupKind::Xdg(ref popup) => {
                     if !popup.is_initial_configure_sent() {
-                        if let Some(output) = self.output_for_popup(&PopupKind::Xdg(popup.clone()))
+                        // ashd: the parent window's scale (it follows the zoom on a canvas).
+                        let root = find_popup_root_surface(&PopupKind::Xdg(popup.clone())).ok();
+                        if let Some((scale, transform)) =
+                            root.and_then(|root| self.niri.scale_transform_for_root(&root))
                         {
-                            let scale = output.current_scale();
-                            let transform = output.current_transform();
                             with_states(surface, |data| {
                                 send_scale_transform(surface, data, scale, transform);
                             });

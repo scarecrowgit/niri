@@ -49,6 +49,8 @@ use crate::window::ResolvedWindowRules;
 
 // ashd: infinite canvas mode (new `impl Workspace` methods live there).
 mod canvas_ext;
+// ashd: client scale following the canvas zoom.
+mod client_scale_ext;
 // ashd: hidden (scratchpad) workspaces.
 mod scratch_ext;
 // ashd: workspaces created for fullscreen windows.
@@ -173,7 +175,9 @@ niri_render_elements! {
         Floating = FloatingSpaceRenderElement<R>,
         // ashd: canvas windows scaled by the canvas zoom.
         Canvas = crate::render_helpers::minify::MinifyRenderElement<
-            RescaleRenderElement<FloatingSpaceRenderElement<R>>,
+            crate::render_helpers::canvas_rescale::CanvasRescaleElement<
+                FloatingSpaceRenderElement<R>,
+            >,
         >,
         // ashd: the strip drawn zoomed while a canvas turns back into it.
         StripZoom = RescaleRenderElement<ScrollingSpaceRenderElement<R>>,
@@ -616,7 +620,9 @@ impl<W: LayoutElement> Workspace<W> {
 
     fn enter_output_for_window(&self, window: &W) {
         if let Some(output) = &self.output {
-            window.set_preferred_scale_transform(self.scale, self.transform);
+            // ashd: canvas windows follow the settled zoom.
+            let scale = self.current_client_scale(window);
+            window.set_preferred_scale_transform(scale, self.transform);
             window.output_enter(output);
         }
     }
@@ -679,7 +685,9 @@ impl<W: LayoutElement> Workspace<W> {
 
         if scale_transform_changed {
             for window in self.windows() {
-                window.set_preferred_scale_transform(self.scale, self.transform);
+                // ashd: canvas windows follow the settled zoom.
+                let scale = self.current_client_scale(window);
+                window.set_preferred_scale_transform(scale, self.transform);
             }
         }
     }
@@ -982,8 +990,9 @@ impl<W: LayoutElement> Workspace<W> {
         rules: &ResolvedWindowRules,
     ) {
         let is_floating = is_floating || self.is_canvas(); // ashd
+        let scale = self.new_canvas_window_scale(); // ashd: zoomed canvas
         window.with_surfaces(|surface, data| {
-            send_scale_transform(surface, data, self.scale, self.transform);
+            send_scale_transform(surface, data, scale, self.transform);
         });
 
         let toplevel = window.toplevel().expect("no x11 support");
@@ -1849,7 +1858,10 @@ impl<W: LayoutElement> Workspace<W> {
                 floating_focus_ring,
                 layer,
                 &mut |elem| {
-                    let elem = RescaleRenderElement::from_element(elem, origin, zoom);
+                    let elem =
+                        crate::render_helpers::canvas_rescale::CanvasRescaleElement::from_element(
+                            elem, origin, zoom, false,
+                        );
                     let elem = crate::render_helpers::minify::MinifyRenderElement::new(elem, false);
                     push(WorkspaceRenderElement::Canvas(elem))
                 },
@@ -2041,6 +2053,9 @@ impl<W: LayoutElement> Workspace<W> {
             .refresh(is_active && !self.floating_is_active.get(), is_focused);
         self.floating
             .refresh(is_active && self.floating_is_active.get(), is_focused);
+
+        // ashd: client scale following the canvas zoom.
+        self.sync_client_scales();
     }
 
     pub fn scroll_amount_to_activate(&self, window: &W::Id) -> f64 {

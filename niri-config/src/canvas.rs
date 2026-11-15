@@ -17,6 +17,9 @@
 //!         wheel-zoom-factor 1.2
 //!         // Supersample window contents when the canvas is zoomed out (false: plain bilinear).
 //!         smooth-zoom-out true
+//!         // Ask windows on a zoomed canvas to render at the output scale times the zoom once the
+//!         // zoom settles (wp_fractional_scale_v1), so text is rendered for the pixels it is shown on.
+//!         rescale-clients true
 //!         // Window title labels at a constant on-screen size above canvas windows once the zoom
 //!         // drops below `title-labels-below` (they fade in over the 0.1 below it).
 //!         title-labels true
@@ -73,8 +76,11 @@ pub struct Canvas {
     pub pan_step: f64,
     /// Zoom factor per wheel notch of the native Mod+scroll zoom; 1 turns it off.
     pub wheel_zoom_factor: f64,
-    /// Supersample (box-filter) window contents drawn minified by the canvas zoom.
+    /// Filter window contents drawn minified by the canvas zoom (a Catmull-Rom kernel at rest,
+    /// a supersampling box filter while zooming); `false`: plain bilinear.
     pub smooth_zoom_out: bool,
+    /// Ask canvas windows to render at `output scale × zoom` once the zoom settles.
+    pub rescale_clients: bool,
     /// Constant-size title labels above canvas windows when zoomed out.
     pub title_labels: bool,
     /// Zoom below which the title labels fade in (fully visible 0.1 below).
@@ -93,6 +99,7 @@ impl Default for Canvas {
             pan_step: 120.,
             wheel_zoom_factor: 1.2,
             smooth_zoom_out: true,
+            rescale_clients: true,
             title_labels: true,
             title_labels_below: 0.7,
             title_labels_size: 12.,
@@ -178,6 +185,8 @@ pub struct CanvasPart {
     #[knuffel(child, unwrap(argument))]
     pub smooth_zoom_out: Option<bool>,
     #[knuffel(child, unwrap(argument))]
+    pub rescale_clients: Option<bool>,
+    #[knuffel(child, unwrap(argument))]
     pub title_labels: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub title_labels_below: Option<FloatOrInt<0, 4>>,
@@ -204,6 +213,9 @@ impl MergeWith<CanvasPart> for Canvas {
         }
         if let Some(x) = part.smooth_zoom_out {
             self.smooth_zoom_out = x;
+        }
+        if let Some(x) = part.rescale_clients {
+            self.rescale_clients = x;
         }
         if let Some(x) = part.title_labels {
             self.title_labels = x;
@@ -366,6 +378,7 @@ mod tests {
         );
         assert_eq!(config.layout.canvas.wheel_zoom_factor, 1.2);
         assert!(config.layout.canvas.smooth_zoom_out);
+        assert!(config.layout.canvas.rescale_clients);
         assert!(config.layout.canvas.title_labels);
         assert_eq!(config.layout.canvas.title_labels_below, 0.7);
         assert_eq!(config.layout.canvas.title_labels_size, 12.);
@@ -405,6 +418,7 @@ mod tests {
                 canvas {
                     wheel-zoom-factor 1.25
                     smooth-zoom-out false
+                    rescale-clients false
                 }
             }
             animations {
@@ -418,6 +432,7 @@ mod tests {
         assert_eq!(config.layout.canvas.wheel_zoom_factor, 1.25);
         assert!(config.layout.canvas.wheel_zoom_enabled());
         assert!(!config.layout.canvas.smooth_zoom_out);
+        assert!(!config.layout.canvas.rescale_clients);
         assert_eq!(
             config.animations.canvas_wheel_zoom.0,
             Animation {
@@ -435,6 +450,38 @@ mod tests {
         assert!(!config.layout.canvas.wheel_zoom_enabled());
         assert!(Config::parse_mem("layout { canvas { wheel-zoom-factor 0.5; }; }").is_err());
         assert!(Config::parse_mem("layout { canvas { wheel-zoom-factor 5; }; }").is_err());
+    }
+
+    #[test]
+    fn parse_client_rescaling() {
+        // Per output the key merges like the other canvas options.
+        let config = Config::parse_mem(
+            r#"
+            layout {
+                canvas {
+                    rescale-clients false
+                }
+            }
+            output "DP-1" {
+                layout {
+                    canvas {
+                        rescale-clients true
+                    }
+                }
+            }
+            window-rule {
+                match app-id="^obsidian$"
+                rescale-on-canvas false
+            }
+            "#,
+        )
+        .unwrap();
+        assert!(!config.layout.canvas.rescale_clients);
+        let output = &config.outputs.0[0];
+        let part = output.layout.as_ref().unwrap().canvas.as_ref().unwrap();
+        assert_eq!(part.rescale_clients, Some(true));
+        assert_eq!(config.window_rules[0].rescale_on_canvas, Some(false));
+        assert!(Config::parse_mem("layout { canvas { rescale-clients 1; }; }").is_err());
     }
 
     #[test]

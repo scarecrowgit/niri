@@ -5,6 +5,12 @@ use approx::assert_abs_diff_eq;
 use super::*;
 use crate::layout::canvas::{rect_center, CanvasTransform};
 
+/// The default zoom 0.62 as it settles: on the fractional scale grid (74/120) of a scale-1
+/// output, see `crate::layout::client_scale`.
+fn z062() -> f64 {
+    crate::layout::client_scale::quantize_zoom(0.62, 1.)
+}
+
 fn ws(layout: &Layout<TestWindow>) -> &Workspace<TestWindow> {
     layout.active_workspace().unwrap()
 }
@@ -72,7 +78,7 @@ fn strip_canvas_strip_preserves_columns() {
     assert_eq!(ws(&layout).mode(), WorkspaceMode::Canvas);
     assert!(ws(&layout).scrolling().is_empty());
     assert_eq!(ws(&layout).floating().tiles().count(), 5);
-    assert_abs_diff_eq!(transform(&layout).zoom, 0.62);
+    assert_abs_diff_eq!(transform(&layout).zoom, z062());
     assert_eq!(ws(&layout).active_window().unwrap().0.id, active_before);
 
     check_ops_on_layout(
@@ -262,7 +268,7 @@ fn pan_zoom_home_and_clamping() {
         Op::CompleteAnimations,
     ]);
     let t0 = transform(&layout);
-    assert_abs_diff_eq!(t0.zoom, 0.62);
+    assert_abs_diff_eq!(t0.zoom, z062());
 
     check_ops_on_layout(
         &mut layout,
@@ -272,7 +278,7 @@ fn pan_zoom_home_and_clamping() {
         ],
     );
     let t1 = transform(&layout);
-    assert_abs_diff_eq!(t1.offset.x - t0.offset.x, 120. / 0.62, epsilon = 1e-9);
+    assert_abs_diff_eq!(t1.offset.x - t0.offset.x, 120. / z062(), epsilon = 1e-9);
     assert_abs_diff_eq!(t1.offset.y, t0.offset.y, epsilon = 1e-9);
 
     check_ops_on_layout(
@@ -284,13 +290,13 @@ fn pan_zoom_home_and_clamping() {
     );
     assert_abs_diff_eq!(
         transform(&layout).offset.y - t0.offset.y,
-        -120. / 0.62,
+        -120. / z062(),
         epsilon = 1e-9
     );
 
     check_ops_on_layout(&mut layout, [Op::CanvasHome, Op::CompleteAnimations]);
     assert_eq!(transform(&layout).offset, Point::from((0., 0.)));
-    assert_abs_diff_eq!(transform(&layout).zoom, 0.62);
+    assert_abs_diff_eq!(transform(&layout).zoom, z062());
 
     check_ops_on_layout(
         &mut layout,
@@ -335,7 +341,7 @@ fn zoom_keeps_anchor_fixed() {
         ],
     );
     let mid = transform(&layout);
-    assert!(mid.zoom > 0.62 && mid.zoom < 0.75);
+    assert!(mid.zoom > z062() && mid.zoom < 0.75);
     let p = mid.view_to_plane(anchor);
     assert_abs_diff_eq!(p.x, before.x, epsilon = 1e-6);
     assert_abs_diff_eq!(p.y, before.y, epsilon = 1e-6);
@@ -529,7 +535,7 @@ fn default_workspace_mode_canvas() {
     assert_eq!(ws(&layout).mode(), WorkspaceMode::Canvas);
     assert!(ws(&layout).is_floating(&1));
     assert!(ws(&layout).is_floating(&2));
-    assert_abs_diff_eq!(transform(&layout).zoom, 0.62);
+    assert_abs_diff_eq!(transform(&layout).zoom, z062());
 
     // The empty workspace below is a canvas too.
     let modes: Vec<_> = layout.workspaces().map(|(_, _, ws)| ws.mode()).collect();

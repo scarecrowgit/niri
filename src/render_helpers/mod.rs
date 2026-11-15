@@ -29,6 +29,7 @@ use crate::render_helpers::xray::Xray;
 pub mod background_effect;
 pub mod blur;
 pub mod border;
+pub mod canvas_rescale; // ashd
 pub mod clipped_surface;
 pub mod damage;
 pub mod debug;

@@ -24,6 +24,9 @@ pub struct CursorManager {
     theme: CursorTheme,
     size: u8,
     current_cursor: CursorImageStatus,
+    /// ashd: cursor shown instead of `current_cursor` (canvas cursors, see
+    /// `crate::input::canvas_cursor`).
+    override_cursor: Option<CursorImageStatus>,
     named_cursor_cache: RefCell<XCursorCache>,
 }
 
@@ -37,6 +40,7 @@ impl CursorManager {
             theme,
             size,
             current_cursor: CursorImageStatus::default_named(),
+            override_cursor: None,
             named_cursor_cache: Default::default(),
         }
     }
@@ -60,7 +64,7 @@ impl CursorManager {
 
     /// Get the current rendering cursor.
     pub fn get_render_cursor(&self, scale: i32) -> RenderCursor {
-        match self.current_cursor.clone() {
+        match self.cursor_image().clone() {
             CursorImageStatus::Hidden => RenderCursor::Hidden,
             CursorImageStatus::Surface(surface) => {
                 let hotspot = with_states(&surface, |states| {
@@ -94,7 +98,7 @@ impl CursorManager {
     }
 
     pub fn is_current_cursor_animated(&self, scale: i32) -> bool {
-        match &self.current_cursor {
+        match self.cursor_image() {
             CursorImageStatus::Hidden => false,
             CursorImageStatus::Surface(_) => false,
             CursorImageStatus::Named(icon) => self
@@ -146,7 +150,32 @@ impl CursorManager {
 
     /// Currently used cursor_image as a cursor provider.
     pub fn cursor_image(&self) -> &CursorImageStatus {
-        &self.current_cursor
+        // ashd: the canvas cursor override wins while it is set.
+        self.override_cursor
+            .as_ref()
+            .unwrap_or(&self.current_cursor)
+    }
+
+    /// ashd: sets (or clears) the named cursor shown instead of the regular one. Returns whether
+    /// it changed.
+    pub fn set_override(&mut self, icon: Option<CursorIcon>) -> bool {
+        let current = match &self.override_cursor {
+            Some(CursorImageStatus::Named(icon)) => Some(*icon),
+            _ => None,
+        };
+        if current == icon {
+            return false;
+        }
+        self.override_cursor = icon.map(CursorImageStatus::Named);
+        true
+    }
+
+    /// ashd: the canvas cursor override, if set.
+    pub fn override_icon(&self) -> Option<CursorIcon> {
+        match &self.override_cursor {
+            Some(CursorImageStatus::Named(icon)) => Some(*icon),
+            _ => None,
+        }
     }
 
     /// Set new cursor image provider.

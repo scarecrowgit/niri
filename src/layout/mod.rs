@@ -79,6 +79,7 @@ use crate::window::ResolvedWindowRules;
 // ashd: infinite canvas workspace mode.
 pub mod canvas;
 pub mod canvas_grid; // ashd
+pub mod client_scale; // ashd
 pub mod closing_window;
 pub mod floating;
 pub mod focus_ring;
@@ -350,6 +351,17 @@ pub trait LayoutElement {
     /// ashd: title and subtitle (app id) shown in the compositor-drawn title bar.
     fn title_bar_text(&self) -> (Option<String>, Option<String>) {
         (None, None)
+    }
+
+    /// ashd: scale and transform last set with `set_preferred_scale_transform`.
+    fn preferred_scale_transform(&self) -> Option<(output::Scale, Transform)> {
+        None
+    }
+
+    /// ashd: whether the window keeps the output scale on a zoomed canvas instead of following
+    /// the zoom (`crate::layout::client_scale`), e.g. while it is being screencast.
+    fn keeps_output_scale(&self) -> bool {
+        false
     }
 }
 
@@ -1477,6 +1489,14 @@ impl<W: LayoutElement> Layout<W> {
                 }
             }
         }
+    }
+
+    /// ashd: earliest time a settled canvas zoom changes client scales (see
+    /// [`client_scale`]).
+    pub fn client_scale_deadline(&self) -> Option<Duration> {
+        self.workspaces()
+            .filter_map(|(_, _, ws)| ws.client_scale_deadline())
+            .min()
     }
 
     pub fn find_window_and_output(&self, wl_surface: &WlSurface) -> Option<(&W, Option<&Output>)> {

@@ -573,6 +573,9 @@ pub struct WorkspaceCanvas<Id> {
     pub(super) work_area: super::work_area::WorkAreaDecor,
     /// Ongoing strip ↔ canvas mode switch.
     pub(super) mode_switch: Option<ModeSwitch>,
+    /// ashd: zoom at rest and since when (monotonic time), for the client scale
+    /// (`crate::layout::client_scale`).
+    pub(super) zoom_rest: Option<(f64, Duration)>,
 }
 
 /// An ongoing strip ↔ canvas mode switch (`animations { canvas-mode-switch }`).
@@ -648,6 +651,7 @@ impl<Id> Default for WorkspaceCanvas<Id> {
             decor: Default::default(),     // ashd
             work_area: Default::default(), // ashd
             mode_switch: None,
+            zoom_rest: None,
         }
     }
 }
@@ -692,6 +696,23 @@ pub fn clamp_zoom(config: &CanvasConfig, zoom: f64) -> f64 {
 ///
 /// Canvas-only operations are no-ops on strip workspaces.
 impl<W: LayoutElement> Layout<W> {
+    /// ashd: whether a canvas pan gesture (pointer or touchpad) is in progress anywhere.
+    pub fn has_canvas_pan_gesture(&self) -> bool {
+        self.workspaces()
+            .any(|(_, _, ws)| ws.has_canvas_pan_gesture(None))
+    }
+
+    /// ashd: sign of the ongoing zoom change of a canvas workspace (target − current zoom), if
+    /// its zoom is animating.
+    pub fn canvas_zoom_direction(&self, ws_id: WorkspaceId) -> Option<f64> {
+        let (_, _, ws) = self.workspaces().find(|(_, _, ws)| ws.id() == ws_id)?;
+        let view = ws.canvas_view()?;
+        if !view.is_zoom_animating() {
+            return None;
+        }
+        Some(view.target().zoom - view.current().zoom)
+    }
+
     /// Toggles the focused workspace between strip and canvas mode.
     pub fn toggle_workspace_mode(&mut self) {
         if let Some(ws) = self.active_workspace_mut() {

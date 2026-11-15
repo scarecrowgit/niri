@@ -231,9 +231,11 @@ impl PointerConstraintsHandler for State {
 impl InputMethodHandler for State {
     fn new_popup(&mut self, surface: PopupSurface) {
         let popup = PopupKind::InputMethod(surface);
-        if let Some(output) = self.output_for_popup(&popup) {
-            let scale = output.current_scale();
-            let transform = output.current_transform();
+        // ashd: the parent window's scale (it follows the zoom on a canvas).
+        let root = smithay::desktop::find_popup_root_surface(&popup).ok();
+        if let Some((scale, transform)) =
+            root.and_then(|root| self.niri.scale_transform_for_root(&root))
+        {
             let wl_surface = popup.wl_surface();
             with_states(wl_surface, |data| {
                 send_scale_transform(wl_surface, data, scale, transform);

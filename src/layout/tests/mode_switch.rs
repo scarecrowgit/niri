@@ -75,7 +75,10 @@ fn entering_the_canvas_starts_at_the_strip() {
     let ws = layout.active_workspace().unwrap();
     assert!(!ws.is_mode_switch_ongoing());
     assert_eq!(ws.canvas_decor_alpha(), 1.);
-    assert_eq!(ws.canvas_zoom(), 0.62);
+    assert_eq!(
+        ws.canvas_zoom(),
+        crate::layout::client_scale::quantize_zoom(0.62, 1.)
+    );
 }
 
 #[test]
@@ -93,7 +96,10 @@ fn leaving_the_canvas_starts_where_the_canvas_drew_the_windows() {
     let ws = layout.active_workspace().unwrap();
     assert!(!ws.is_canvas());
     // First frame: the strip is drawn at the canvas zoom and every window where it was.
-    assert_eq!(ws.strip_transition_zoom(), Some((0.62, anchor)));
+    assert_eq!(
+        ws.strip_transition_zoom(),
+        Some((crate::layout::client_scale::quantize_zoom(0.62, 1.), anchor))
+    );
     assert_same(&before, &drawn(&layout));
     // The grid starts fully visible and fades out.
     assert_eq!(ws.canvas_decor_alpha(), 1.);

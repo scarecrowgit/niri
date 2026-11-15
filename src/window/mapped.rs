@@ -1,5 +1,5 @@
 use std::cell::{Cell, Ref, RefCell};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use niri_config::{Color, Config, CornerRadius, GradientInterpolation, WindowRule};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -99,6 +99,17 @@ pub struct Mapped {
 
     /// Whether this window is a target of a window cast.
     is_window_cast_target: bool,
+
+    /// ashd: scale and transform last sent to the window's surfaces (they may differ from the
+    /// output's on a zoomed canvas).
+    preferred_scale_transform: Cell<Option<(output::Scale, Transform)>>,
+
+    /// ashd: when the preferred scale last changed, and the window size at that time.
+    scale_change: Cell<Option<(Instant, Size<i32, Logical>)>>,
+
+    /// ashd: the window resized itself in response to a scale change (Chromium/Electron below
+    /// scale 1), so it keeps the output scale on zoomed canvases.
+    resizes_on_scale_change: Cell<bool>,
 
     /// Whether this window should ignore opacity set through window rules.
     ignore_opacity_window_rule: bool,
@@ -297,6 +308,9 @@ impl Mapped {
             is_active_in_column: true,
             is_floating: false,
             is_window_cast_target: false,
+            preferred_scale_transform: Cell::new(None),
+            scale_change: Cell::new(None),
+            resizes_on_scale_change: Cell::new(false),
             ignore_opacity_window_rule: false,
             block_out_buffer: RefCell::new(SolidColorBuffer::new((0., 0.), [0., 0., 0., 1.])),
             blur_config: config.blur,
@@ -403,6 +417,36 @@ impl Mapped {
         self.is_focused = is_focused;
         self.is_urgent = false;
         self.need_to_recompute_rules = true;
+    }
+
+    /// ashd: after a commit, checks whether the window changed its own size shortly after its
+    /// preferred scale changed (without us requesting a size), which is how Chromium/Electron
+    /// react to fractional scales below 1 (they shrink the window by the scale). Such windows
+    /// keep the output scale on zoomed canvases from then on. Returns whether the window was
+    /// just marked.
+    pub fn check_scale_resize(&self) -> bool {
+        /// How long after a scale change a resize counts as a reaction to it.
+        const WINDOW: Duration = Duration::from_secs(2);
+
+        let Some((at, size)) = self.scale_change.get() else {
+            return false;
+        };
+        if at.elapsed() > WINDOW {
+            self.scale_change.set(None);
+            return false;
+        }
+        let current = self.window.geometry().size;
+        if current == size || self.resizes_on_scale_change.get() {
+            return false;
+        }
+        // A size we asked for is not the client's own doing.
+        let requested = self.requested_size();
+        if requested.is_some_and(|r| r == current) {
+            return false;
+        }
+        self.scale_change.set(None);
+        self.resizes_on_scale_change.set(true);
+        true
     }
 
     pub fn set_is_window_cast_target(&mut self, value: bool) {
@@ -933,6 +977,15 @@ impl LayoutElement for Mapped {
     }
 
     fn set_preferred_scale_transform(&self, scale: output::Scale, transform: Transform) {
+        // ashd: remember the scale; a client that resizes itself right after a change is caught
+        // by `check_scale_resize()`.
+        let previous = self
+            .preferred_scale_transform
+            .replace(Some((scale, transform)));
+        if previous.is_some_and(|(p, _)| p.fractional_scale() != scale.fractional_scale()) {
+            self.scale_change
+                .set(Some((Instant::now(), self.window.geometry().size)));
+        }
         self.window.with_surfaces(|surface, data| {
             send_scale_transform(surface, data, scale, transform);
         });
@@ -1410,6 +1463,17 @@ impl LayoutElement for Mapped {
         with_toplevel_role(self.toplevel(), |role| {
             (role.title.clone(), role.app_id.clone())
         })
+    }
+
+    fn preferred_scale_transform(&self) -> Option<(output::Scale, Transform)> {
+        self.preferred_scale_transform.get()
+    }
+
+    fn keeps_output_scale(&self) -> bool {
+        // A window cast must not come out at the reduced resolution of a zoomed canvas.
+        self.is_window_cast_target
+            || self.rules.rescale_on_canvas == Some(false)
+            || self.resizes_on_scale_change.get()
     }
 
     fn on_commit(&mut self, commit_serial: Serial) {

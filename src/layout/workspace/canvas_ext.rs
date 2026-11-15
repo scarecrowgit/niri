@@ -15,7 +15,6 @@ use std::time::Duration;
 
 use niri_config::WorkspaceMode;
 use niri_ipc::WindowLayout;
-use smithay::backend::renderer::element::utils::RescaleRenderElement;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use super::{FloatingActive, Workspace, WorkspaceAddWindowTarget, WorkspaceRenderElement};
@@ -32,7 +31,8 @@ use crate::layout::scrolling::{Column, ColumnWidth, StripArrangement};
 use crate::layout::tile::Tile;
 use crate::layout::title_bar::{LabelStyle, LABEL_GAP};
 use crate::layout::{HitType, LayoutElement, Options, RemovedTile, RenderLayer};
-use crate::render_helpers::minify::MinifyRenderElement;
+use crate::render_helpers::canvas_rescale::CanvasRescaleElement;
+use crate::render_helpers::minify::{MinifyMode, MinifyRenderElement};
 use crate::render_helpers::renderer::NiriRenderer;
 use crate::render_helpers::xray::XrayPos;
 use crate::render_helpers::{RenderCtx, RenderTarget};
@@ -176,7 +176,7 @@ impl<W: LayoutElement> Workspace<W> {
             return;
         }
 
-        let zoom = self.options.layout.canvas.default_zoom;
+        let zoom = self.canvas_settle_zoom(self.options.layout.canvas.default_zoom);
         self.canvas.mode = WorkspaceMode::Canvas;
         self.canvas.strip = Some(StripArrangement {
             columns: Vec::new(),
@@ -333,8 +333,12 @@ impl<W: LayoutElement> Workspace<W> {
     ) {
         let config = self.options.animations.canvas_mode_switch.0;
         if to_canvas && target.is_finite() {
-            let zoom = self.options.layout.canvas.clamp_zoom(target.zoom);
-            let target = CanvasTransform::new(target.offset, zoom);
+            let zoom = self.canvas_settle_zoom(target.zoom);
+            let target = if zoom == target.zoom {
+                target
+            } else {
+                target.zoomed_around(focus, zoom)
+            };
             self.canvas
                 .view
                 .animate_to(&self.clock, target, focus, config, config);
@@ -698,8 +702,13 @@ impl<W: LayoutElement> Workspace<W> {
         if !self.is_canvas() || !target.is_finite() {
             return;
         }
-        let zoom = self.options.layout.canvas.clamp_zoom(target.zoom);
-        let target = CanvasTransform::new(target.offset, zoom);
+        // ashd: settled zooms stay on the client scale grid (keeping the focus point fixed).
+        let zoom = self.canvas_settle_zoom(target.zoom);
+        let target = if zoom == target.zoom {
+            target
+        } else {
+            target.zoomed_around(focus, zoom)
+        };
         let pan = self.options.animations.canvas_pan.0;
         self.canvas
             .view
@@ -733,7 +742,7 @@ impl<W: LayoutElement> Workspace<W> {
         let Some(target) = self.canvas_target_transform() else {
             return;
         };
-        let zoom = self.options.layout.canvas.clamp_zoom(target.zoom);
+        let zoom = self.canvas_settle_zoom(target.zoom);
         if zoom != target.zoom {
             self.canvas_set_zoom(zoom, None);
         }
@@ -744,6 +753,7 @@ impl<W: LayoutElement> Workspace<W> {
     fn sync_canvas(&mut self) {
         let transform = self.canvas.view.current();
         self.floating.set_canvas_transform(transform);
+        self.track_canvas_zoom_rest(); // ashd: client scale
 
         let frame_zoom = if self.is_canvas() { transform.zoom } else { 1. };
         let zoom_settled =
@@ -979,12 +989,27 @@ impl<W: LayoutElement> Workspace<W> {
                     push(elem.into())
                 });
         } else {
-            // Zoomed out, window contents are supersampled instead of skipping texels.
-            let minify = zoom < 1. && self.options.layout.canvas.smooth_zoom_out;
+            // At rest, buffers rendered for the zoom (clients following the zoomed scale, title
+            // strip text) are drawn 1:1, and the others are filtered with the sharp kernel;
+            // while the zoom changes, the cheap box filter is used (supersampling instead of
+            // skipping texels when zoomed out).
+            let at_rest = self.canvas_zoom_at_rest();
+            let mode = if !(zoom < 1. && self.options.layout.canvas.smooth_zoom_out) {
+                MinifyMode::Off
+            } else if at_rest {
+                MinifyMode::Sharp
+            } else {
+                MinifyMode::Box
+            };
             self.floating
                 .render(ctx, xray_pos, view_rect, focus_ring, layer, &mut |elem| {
-                    let elem = RescaleRenderElement::from_element(elem, Point::from((0, 0)), zoom);
-                    let elem = MinifyRenderElement::new(elem, minify);
+                    let elem = CanvasRescaleElement::from_element(
+                        elem,
+                        Point::from((0, 0)),
+                        zoom,
+                        at_rest,
+                    );
+                    let elem = MinifyRenderElement::with_mode(elem, mode);
                     push(WorkspaceRenderElement::Canvas(elem))
                 });
         }
@@ -1314,6 +1339,11 @@ impl<W: LayoutElement> Workspace<W> {
     pub fn canvas_zoom_gesture_end(&mut self) -> bool {
         if self.canvas.zoom_gesture.take().is_none() {
             return false;
+        }
+        // ashd: settle on the client scale grid (a change of at most 1/240 of the scale).
+        let current = self.canvas.view.current();
+        if self.canvas_settle_zoom(current.zoom) != current.zoom {
+            self.canvas_set_zoom(current.zoom, None);
         }
         self.sync_canvas();
         true

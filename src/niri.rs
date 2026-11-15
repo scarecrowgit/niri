@@ -458,6 +458,8 @@ pub struct Niri {
     pub window_mru_ui: WindowMruUi,
     /// ashd: edge panels revealed over fullscreen windows.
     pub edge_reveal: crate::edge_reveal::EdgeRevealState,
+    /// ashd: wake-up for client scales that settle (`crate::layout::client_scale`).
+    pub client_scale_timer: Option<(RegistrationToken, Duration)>,
     pub pending_mru_commit: Option<PendingMruCommit>,
 
     pub pick_window: Option<async_channel::Sender<Option<MappedId>>>,
@@ -898,6 +900,7 @@ impl State {
         // it's good to advance every now and then so the workspace clean-up and animations don't
         // build up (the 1 second frame callback timer will call this line).
         self.niri.advance_animations();
+        self.niri.refresh_client_scale_timer(); // ashd
 
         self.niri.redraw_queued_outputs(&mut self.backend);
 
@@ -951,6 +954,7 @@ impl State {
         self.niri.global_space.refresh();
         self.niri.refresh_idle_inhibit();
         self.refresh_pointer_contents();
+        self.refresh_canvas_cursor(); // ashd
         self.refresh_edge_reveal(); // ashd
         foreign_toplevel::refresh(self);
         ext_workspace::refresh(self);
@@ -3082,6 +3086,7 @@ impl Niri {
 
             window_mru_ui,
             edge_reveal: Default::default(), // ashd
+            client_scale_timer: None,        // ashd
             pending_mru_commit: None,
 
             pick_window: None,
@@ -4178,6 +4183,52 @@ impl Niri {
         self.global_space
             .outputs()
             .find(|output| output_matches_name(output, target))
+    }
+
+    /// ashd: scale and transform for a new surface (popup, subsurface) of the surface tree with
+    /// this root: the one of its window (which follows the zoom on a canvas), else its output's.
+    pub fn scale_transform_for_root(
+        &self,
+        root: &WlSurface,
+    ) -> Option<(smithay::output::Scale, Transform)> {
+        if let Some((mapped, Some(output))) = self.layout.find_window_and_output(root) {
+            return Some(
+                mapped
+                    .preferred_scale_transform()
+                    .unwrap_or((output.current_scale(), output.current_transform())),
+            );
+        }
+        let output = self.output_for_root(root)?;
+        Some((output.current_scale(), output.current_transform()))
+    }
+
+    /// ashd: wakes the event loop when a settled canvas zoom is due to change client scales.
+    pub fn refresh_client_scale_timer(&mut self) {
+        let deadline = self.layout.client_scale_deadline();
+        match (deadline, self.client_scale_timer) {
+            (Some(d), Some((_, at))) if at == d => {}
+            (None, None) => {}
+            (deadline, timer) => {
+                if let Some((token, _)) = timer {
+                    self.event_loop.remove(token);
+                }
+                self.client_scale_timer = deadline.map(|d| {
+                    let now = get_monotonic_time();
+                    let timer =
+                        Timer::from_duration(d.saturating_sub(now) + Duration::from_millis(1));
+                    let token = self
+                        .event_loop
+                        .insert_source(timer, |_, _, state| {
+                            // The event loop iteration refreshes the layout, which sends the
+                            // scales.
+                            state.niri.client_scale_timer = None;
+                            TimeoutAction::Drop
+                        })
+                        .unwrap();
+                    (token, d)
+                });
+            }
+        }
     }
 
     pub fn output_for_root(&self, root: &WlSurface) -> Option<&Output> {

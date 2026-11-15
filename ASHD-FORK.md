@@ -75,7 +75,8 @@ layout {
         zoom-steps 0.4 0.5 0.62 0.75 0.9 1.0
         pan-step 120
         wheel-zoom-factor 1.2   // Mod+scroll zoom per wheel notch, 1..4; 1 = off (binds get it)
-        smooth-zoom-out true    // supersample window contents below 80% (false: bilinear)
+        smooth-zoom-out true    // filter minified window contents (false: bilinear)
+        rescale-clients true    // windows render at output scale × zoom once the zoom settles
         title-labels true       // constant-size title labels when zoomed out
         title-labels-below 0.7  // zoom below which they fade in (fully shown 0.1 lower)
         title-labels-size 12    // label text size, logical px (4..72)
@@ -95,7 +96,8 @@ animations {
 }
 ```
 
-See "Zoom feel and zoom-out quality" for the wheel, filter and label options.
+See "Zoom feel and zoom-out quality" for the wheel, filter and label options, and "Crisp zoom"
+for `rescale-clients` (and the `rescale-on-canvas` window rule).
 
 `default-workspace-mode` and `canvas {}` are regular `layout` options, so they merge per output
 (`output { layout { ... } }`) and per named workspace (`workspace "x" { layout { ... } }`) like
@@ -1425,3 +1427,150 @@ window no longer moves with the plane, `ClosingWindow::set_pinned`). Frames stil
 during a zoom animation: the compensated width is an integer that steps at fixed zoom levels,
 and applying it mid-animation would change tile sizes by 2 px several times per zoom (visible
 1 px jumps of every window), which is worse than the thin frame for 200 ms.
+
+## Crisp zoom: clients render for the zoom
+
+Measured cause of the soft canvas (nested session, kitty / GTK4 zenity / Qt6 assistant, 1x
+output): every window buffer was rendered for the output scale and *resampled* to the zoom.
+At 0.9 that is plain bilinear filtering (the minify shader only engaged below 0.8): every
+glyph stem is smeared over two pixels with a phase that changes across the window. Text
+contrast of a dense kitty crop drops from 0.74 (100%) to 0.66 at 0.9, 0.59 at 0.75 and 0.57 at
+0.55 (GTK4: 0.79 → 0.66 / 0.56 / 0.52). No kernel can fix that: the glyphs were hinted for a
+pixel grid that is not the one they end up on.
+
+### What happens now
+
+- **Per-window scale follows the zoom** (`src/layout/client_scale.rs`,
+  `src/layout/workspace/client_scale_ext.rs`). Once the zoom of a canvas has been at rest for
+  `CLIENT_SCALE_SETTLE` (120 ms after the zoom animation / pinch / mode switch ended), every
+  window on its plane (pinned ones too) gets `wp_fractional_scale_v1.preferred_scale =
+  output scale × zoom` and `wl_surface.preferred_buffer_scale = max(1, ceil(output scale ×
+  zoom))`. Its logical size and position are unchanged, so a client that follows renders
+  `logical × scale × zoom` pixels with a viewport of the logical size, and the canvas draws that
+  buffer 1:1. One update per settle per window (`Workspace::refresh` compares with the scale
+  last sent, `LayoutElement::preferred_scale_transform()`); a calloop timer
+  (`Niri::refresh_client_scale_timer`) wakes the loop when the settle time is over.
+- **Going back to 100%** (zoom target 1, strip mode, fullscreen / maximized, moved to a strip
+  workspace or another output's strip) restores the output scale *right away* (zoom-in
+  animations then downscale the fresh full-size buffers instead of magnifying small ones). A
+  window entering a settled canvas gets the zoomed scale at once (also in its initial configure
+  when it opens there). New popups and subsurfaces get their window's scale
+  (`Niri::scale_transform_for_root`); layer-shell surfaces keep the output scale.
+- **Settled zooms are on the protocol's grid.** `wp_fractional_scale_v1` speaks 1/120 steps,
+  so a zoom of 0.62 would give a 493 px buffer drawn 496 px wide. With `rescale-clients` on,
+  every zoom *target* (steps, `canvas-set-zoom`, fit, wheel notches, default zoom, the end of a
+  pinch) is rounded to the nearest `k / (120 × output scale)` inside the step range
+  (`quantize_zoom_within`), keeping the anchor point fixed: 0.62 settles at 0.6167, a 1.2 wheel
+  notch from there at 0.7417; 0.4 0.5 0.55 0.75 0.9 1.0 are exact at scales 1 and 2. IPC
+  reports these values.
+- **1:1 composition** (`src/render_helpers/canvas_rescale.rs`): canvas elements are rescaled by
+  `CanvasRescaleElement` instead of smithay's `RescaleRenderElement`. At rest an element whose
+  source buffer already has (±1 px) the rescaled size but not its unscaled size gets exactly the
+  source size, so client buffers rendered for the zoom and title-strip text rasterized at the
+  settled zoom are drawn pixel-exact even when a client rounds its buffer size differently or
+  the output scale is fractional. Positions are the rescaled, rounded ones (pixel grid).
+  Damage and opaque regions are mapped with the per-axis factor actually drawn.
+- **Better kernel for clients that do not follow** (`minify.rs`, `shaders/minify.frag`): while
+  the zoom is at rest, textures drawn at 1–2 texels per pixel (zoom 0.5–1) use a Catmull-Rom
+  kernel stretched to the pixel footprint (`MinifyMode::Sharp`, `2·ceil(2k)` taps per axis,
+  ≤ 64 reads per pixel), the box filter above 2. While the zoom changes, the cheap box filter is
+  used as before (bilinear above 0.8). Buffers drawn 1:1 (followers at rest) use the default
+  shader. `smooth-zoom-out false` still means plain bilinear everywhere.
+- **Misbehaving clients**: Chromium/Electron (tested: Obsidian 1.13, Electron) answer a scale
+  below 1 by shrinking their window (800×650 → 608×509) and drawing without a viewport
+  destination. A window that changes its own size within 2 s after its scale changed (a size
+  niri did not request) is marked (`Mapped::check_scale_resize`, logged as a warning) and keeps
+  the output scale from then on; Chromium then restores its size by itself. The shrunken window
+  can be visible for a frame or two. The window rule `rescale-on-canvas false` opts a window out
+  up front.
+- **Screencasts and screenshots**: a window that is a window-cast target keeps the output scale
+  (the cast is never at the reduced resolution; on screen it is resampled with the kernel
+  above). Output screenshots and casts show what is on screen. `screenshot-window` renders the
+  window at the output scale as before; for a zoomed window whose client follows the zoom, that
+  is its current (on-screen) resolution scaled up, i.e. exactly what is shown.
+- Unchanged: strip workspaces, canvases at zoom 1, fullscreen workspaces, the overview zoom
+  (not a reason to change client scales), input (the logical size does not change; clicks in
+  zoomed Firefox / kitty land where drawn).
+
+```kdl
+layout {
+    canvas {
+        rescale-clients true   // default; false: buffers stay at the output scale (resampled)
+    }
+}
+window-rule {
+    match app-id="^(obsidian|code|chromium-browser)$"
+    rescale-on-canvas false    // keep the output scale on zoomed canvases
+}
+```
+
+### Measurements (nested session, 1x output, contrast of a dense text crop; 4x crops in
+`wt/evidence-crisp/sheet-*.png`)
+
+| client | follows | 0.9 before → after | 0.75 before → after | 0.55 before → after |
+| --- | --- | --- | --- | --- |
+| kitty 0.4x (Wayland) | yes | 0.66 → 0.72 | 0.59 → 0.72 | 0.57 → 0.66 |
+| GTK4 (zenity 4.2) | yes | 0.66 → 0.76 | 0.56 → 0.72 | 0.52 → 0.60 |
+| Firefox (Wayland) | yes (incl. menus) | | | |
+| Qt 6.11 (assistant) | no (ignores scale changes) → kernel | 0.73 → 0.77 | 0.65 → 0.74 | 0.84 → 0.84 |
+| kitty via xwayland-satellite | no → kernel | 0.66 → 0.74 | 0.59 → 0.70 | 0.57 → 0.61 |
+| Electron (Obsidian) | misbehaves → auto opt-out | | | |
+
+kitty at 0.75 is pixel-identical to kitty at 100% with an 8.25 pt font (0.75 × 11 pt); at 0.9
+and 0.55 it differs only by sub-pixel cell placement. At output scale 1.25 × zoom 0.8 clients
+render at exactly 1.0, at 0.7533 at 113/120 (753×565 for 800×600 logical), drawn 1:1.
+
+Costs and limits: every client re-renders once per settle (its buffers shrink by `zoom²`, so
+memory goes down when zoomed out); with 11 kitty windows a settle cost the clients ~120 ms of
+CPU in total (~11 ms each, font reload included), nothing while idle. The Catmull-Rom kernel
+reads up to 64 texels per pixel, but only for clients that do not follow, and only at rest. The new buffer usually arrives 1–2 frames after the scale
+event; until then the old buffer is shown through the kernel, the window rectangle does not
+change (frame sequence in `wt/evidence-crisp/wheel-sequence/`). kitty itself shows its old glyph
+size in the new buffer for ~25 ms (one or two frames) while it reloads fonts — client
+behaviour. Terminals may reflow by a column when the cell width rounds differently. The
+interactive-move tile is not snapped (drawn through the box filter while dragged).
+
+### Files
+
+| File | Change |
+| --- | --- |
+| `src/layout/client_scale.rs` (new) | `CLIENT_SCALE_SETTLE`, `quantize_zoom(_within)`, `zoomed_client_scale`, tests |
+| `src/layout/workspace/client_scale_ext.rs` (new) | rest tracking, deadline, `canvas_settle_zoom`, per-window target scale, `sync_client_scales` |
+| `src/render_helpers/canvas_rescale.rs` (new) | `CanvasRescaleElement` (snapping rescale), tests |
+| `src/render_helpers/minify.rs`, `shaders/minify.frag` | `MinifyMode` (Off / Box / Sharp), Catmull-Rom path, per-axis minification |
+| `src/render_helpers/clipped_surface.rs` | passes the buffer transform to `clipped_program` |
+| `src/layout/workspace.rs` | `mod client_scale_ext`; `Canvas` variant type; window scale on enter / output scale change / initial configure; sync in `refresh` |
+| `src/layout/workspace/canvas_ext.rs` | snapping + mode in `render_canvas`; quantized targets (animate, mode switch, config, default mode, pinch end); rest tracking in `sync_canvas` |
+| `src/layout/canvas.rs` | `WorkspaceCanvas.zoom_rest`; `Layout::{has_canvas_pan_gesture, canvas_zoom_direction}` |
+| `src/layout/mod.rs` | `mod client_scale`; `LayoutElement::{preferred_scale_transform, keeps_output_scale}` (defaults); `Layout::client_scale_deadline` |
+| `src/window/mapped.rs`, `src/window/mod.rs` | scale cache, resize-on-scale-change detection, `rescale_on_canvas` rule |
+| `src/handlers/{compositor,xdg_shell,mod}.rs` | subsurface / popup / IME popup scale from their window; resize detection after commits |
+| `src/niri.rs` | `client_scale_timer`, `scale_transform_for_root`, `refresh_canvas_cursor` call |
+| `niri-config/src/{canvas,window_rule,lib}.rs` | `rescale-clients`, `rescale-on-canvas`, tests, snapshot |
+| `src/layout/tests/client_scale.rs` (new), `src/tests/canvas_input.rs`, `src/layout/tests/{canvas,mode_switch}.rs` | tests; settled 0.62 is 74/120 now |
+
+No IPC changes.
+
+## Canvas cursors
+
+`src/input/canvas_cursor.rs` (rule in `canvas_cursor()`, recomputed every event loop
+iteration after the pointer contents; shown through an override in `CursorManager` that never
+touches the client's cursor state):
+
+| Situation | Cursor |
+| --- | --- |
+| canvas pan in progress (Mod+LMB / Mod+MMB drag, touchpad pan), anywhere | `grabbing` |
+| empty canvas space, Mod held alone (and wheel zoom on), zoom animating downwards | `zoom-out` |
+| empty canvas space, Mod held alone | `zoom-in` |
+| empty canvas space, otherwise | `grab` |
+| over a window (surface, border, title strip) or a top/overlay layer surface | client's / regular |
+| strip workspaces, other grabs (move, resize), overview, screenshot UI, lock screen, switcher, hot corner, hidden pointer, tablet | regular (unchanged) |
+
+"Empty canvas space" counts background and bottom layer surfaces as empty (like Mod+LMB
+panning). Releasing Mod, leaving the canvas, entering a window or ending the pan restores the
+previous cursor on the next loop iteration. Standard cursor-shape names are used, so any Xcursor
+theme with `grab`, `grabbing`, `zoom-in`, `zoom-out` shows them (Adwaita 50 and Bibata have
+them; checked in the nested session with Bibata-Modern-Ice, see
+`wt/evidence-crisp/cursors/`). Tests: `canvas_cursor` unit tests, `src/tests/canvas_input.rs`
+(`canvas_cursors_follow_the_rule`, `canvas_cursor_only_on_canvases`).
+

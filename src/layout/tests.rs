@@ -16,6 +16,7 @@ use super::*;
 
 mod animations;
 mod canvas; // ashd
+mod client_scale; // ashd
 mod decorations; // ashd
 mod fullscreen;
 mod fullscreen_ws; // ashd
@@ -51,6 +52,9 @@ struct TestWindowInner {
     animate_next_configure: Cell<bool>,
     animation_snapshot: RefCell<Option<LayoutElementRenderSnapshot>>,
     rules: ResolvedWindowRules,
+    // ashd: last preferred scale and transform, and how often they were set.
+    preferred_scale: Cell<Option<(output::Scale, Transform)>>,
+    preferred_scale_sets: Cell<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -103,6 +107,8 @@ impl TestWindow {
             animate_next_configure: Cell::new(false),
             animation_snapshot: RefCell::new(None),
             rules: params.rules.unwrap_or_default(),
+            preferred_scale: Cell::new(None),
+            preferred_scale_sets: Cell::new(0),
         }))
     }
 
@@ -209,7 +215,16 @@ impl LayoutElement for TestWindow {
         false
     }
 
-    fn set_preferred_scale_transform(&self, _scale: output::Scale, _transform: Transform) {}
+    fn set_preferred_scale_transform(&self, scale: output::Scale, transform: Transform) {
+        self.0.preferred_scale.set(Some((scale, transform)));
+        self.0
+            .preferred_scale_sets
+            .set(self.0.preferred_scale_sets.get() + 1);
+    }
+
+    fn preferred_scale_transform(&self) -> Option<(output::Scale, Transform)> {
+        self.0.preferred_scale.get()
+    }
 
     fn has_ssd(&self) -> bool {
         false

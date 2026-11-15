@@ -214,7 +214,8 @@ fn scroll_reaches_scaled_window() {
     let win = window_view_pos(&mut f);
 
     let pos = move_pointer(&mut f, id, win + Point::from((50., 50.)));
-    let expected = (pos - win).downscale(0.62);
+    let zoom = ws_transform(&mut f).zoom;
+    let expected = (pos - win).downscale(zoom);
     let events = f.client(id).state.take_pointer_events(&surface);
     let (x, y) = last_position(&events).unwrap();
     // wl_fixed has a precision of 1/256.
@@ -295,17 +296,19 @@ fn mod_wheel_zooms_continuously_at_the_cursor() {
     f.client(id).state.take_pointer_events(&surface);
 
     super_key(&mut f, true);
+    // Settled zooms stay on the fractional scale grid (`crate::layout::client_scale`).
+    let q = |z: f64| crate::layout::client_scale::quantize_zoom(z, 1.);
     // One notch up: x1.2 (default wheel-zoom-factor), no step list, no cooldown.
     wheel(&mut f, id, -120);
     let t = ws_transform(&mut f);
-    assert!((t.zoom - 0.62 * 1.2).abs() < 1e-9, "{t:?}");
+    assert!((t.zoom - q(q(0.62) * 1.2)).abs() < 1e-9, "{t:?}");
     assert!((t.view_to_plane(anchor).x - plane.x).abs() < 1e-6);
     assert!((t.view_to_plane(anchor).y - plane.y).abs() < 1e-6);
 
     // Two more right away accumulate (capped at the largest zoom step, 1.0).
     wheel(&mut f, id, -120);
     let t = ws_transform(&mut f);
-    assert!((t.zoom - 0.62 * 1.44).abs() < 1e-9, "{t:?}");
+    assert!((t.zoom - q(q(q(0.62) * 1.2) * 1.2)).abs() < 1e-9, "{t:?}");
     wheel(&mut f, id, -120);
     assert_eq!(ws_transform(&mut f).zoom, 1.0);
 
@@ -317,7 +320,7 @@ fn mod_wheel_zooms_continuously_at_the_cursor() {
     pointer.frame();
     f.double_roundtrip(id);
     let t = ws_transform(&mut f);
-    assert!((t.zoom - 1.2f64.powf(-0.25)).abs() < 1e-9, "{t:?}");
+    assert!((t.zoom - q(1.2f64.powf(-0.25))).abs() < 1e-9, "{t:?}");
     let t2 = ws_transform(&mut f);
     assert!((t2.view_to_plane(anchor).x - plane.x).abs() < 1e-6);
 
@@ -352,5 +355,91 @@ fn mod_wheel_zoom_can_be_turned_off() {
     move_pointer(&mut f, id, Point::from((700., 400.)));
     super_key(&mut f, true);
     wheel(&mut f, id, -120);
-    assert_eq!(ws_transform(&mut f).zoom, 0.62);
+    let zoom = ws_transform(&mut f).zoom;
+    assert_eq!(zoom, crate::layout::client_scale::quantize_zoom(0.62, 1.));
+}
+
+fn canvas_cursor(f: &mut Fixture) -> Option<smithay::input::pointer::CursorIcon> {
+    f.niri().cursor_manager.override_icon()
+}
+
+#[test]
+fn canvas_cursors_follow_the_rule() {
+    use smithay::input::pointer::CursorIcon;
+
+    let (mut f, id, surface) = set_up(0.5);
+    let win = window_view_pos(&mut f);
+
+    // Empty canvas: grab.
+    move_pointer(&mut f, id, Point::from((100., 100.)));
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grab));
+
+    // Mod held: zoom-in; released: grab again.
+    super_key(&mut f, true);
+    f.double_roundtrip(id);
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::ZoomIn));
+    super_key(&mut f, false);
+    f.double_roundtrip(id);
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grab));
+
+    // Over the window the client's cursor wins, Mod or not.
+    move_pointer(&mut f, id, win + Point::from((50., 50.)));
+    assert_eq!(canvas_cursor(&mut f), None);
+    super_key(&mut f, true);
+    f.double_roundtrip(id);
+    assert_eq!(canvas_cursor(&mut f), None);
+    super_key(&mut f, false);
+    f.double_roundtrip(id);
+    f.client(id).state.take_pointer_events(&surface);
+
+    // Leaving the window: grab.
+    move_pointer(&mut f, id, Point::from((100., 100.)));
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grab));
+
+    // Mod+LMB on the empty plane pans: grabbing, also when the pointer crosses the window;
+    // the end of the pan gives the regular canvas cursor back.
+    super_key(&mut f, true);
+    f.double_roundtrip(id);
+    button(&mut f, id, true);
+    assert!(f.niri().layout.has_canvas_pan_gesture());
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grabbing));
+    move_pointer(&mut f, id, win + Point::from((10., 10.)));
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grabbing));
+    button(&mut f, id, false);
+    assert!(!f.niri().layout.has_canvas_pan_gesture());
+    super_key(&mut f, false);
+    f.double_roundtrip(id);
+    move_pointer(&mut f, id, Point::from((5., 5.)));
+    assert_eq!(canvas_cursor(&mut f), Some(CursorIcon::Grab));
+}
+
+#[test]
+fn canvas_cursor_only_on_canvases() {
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, OUTPUT_SIZE);
+    let id = f.add_client();
+    move_pointer(&mut f, id, Point::from((100., 100.)));
+    assert_eq!(canvas_cursor(&mut f), None);
+}
+
+#[test]
+fn zoomed_window_gets_the_zoomed_scale() {
+    use crate::layout::client_scale::CLIENT_SCALE_SETTLE;
+    use crate::layout::LayoutElement as _;
+
+    let (mut f, id, _surface) = set_up(0.5);
+    let scale = |f: &mut Fixture| {
+        let (_, mapped) = f.niri().layout.windows().next().unwrap();
+        let (scale, _) = mapped.preferred_scale_transform().unwrap();
+        (scale.fractional_scale(), scale.integer_scale())
+    };
+
+    std::thread::sleep(CLIENT_SCALE_SETTLE + std::time::Duration::from_millis(30));
+    f.double_roundtrip(id);
+    assert_eq!(scale(&mut f), (0.5, 1));
+
+    // Back to 100%: the output scale right away.
+    f.niri().layout.canvas_set_zoom(1., None);
+    f.double_roundtrip(id);
+    assert_eq!(scale(&mut f), (1., 1));
 }

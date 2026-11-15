@@ -2021,6 +2021,7 @@ mod tests {
                     pan_step: 120.0,
                     wheel_zoom_factor: 1.2,
                     smooth_zoom_out: true,
+                    rescale_clients: true,
                     title_labels: true,
                     title_labels_below: 0.7,
                     title_labels_size: 12.0,
@@ -2586,6 +2587,7 @@ mod tests {
                         },
                     },
                     title_bar: None,
+                    rescale_on_canvas: None,
                 },
             ],
             layer_rules: [

@@ -134,6 +134,9 @@ pub struct ResolvedWindowRules {
 
     /// ashd: whether to show the compositor-drawn title bar (`None`: per layout config).
     pub title_bar: Option<bool>,
+
+    /// ashd: whether the window renders at the canvas zoom (`None`: yes, per layout config).
+    pub rescale_on_canvas: Option<bool>,
 }
 
 impl<'a> WindowRef<'a> {
@@ -328,6 +331,9 @@ impl ResolvedWindowRules {
                 // ashd
                 if let Some(x) = rule.title_bar {
                     resolved.title_bar = Some(x);
+                }
+                if let Some(x) = rule.rescale_on_canvas {
+                    resolved.rescale_on_canvas = Some(x);
                 }
             }
 

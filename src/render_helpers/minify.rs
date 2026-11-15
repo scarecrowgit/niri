@@ -16,6 +16,16 @@
 //! Window surfaces that niri clips to their geometry (`ClippedSurfaceRenderElement`, rounded
 //! corners) use their own shader; while a `MinifyRenderElement` draws, [`clipped_program`] hands
 //! them the minifying variant of it.
+//!
+//! [`MinifyMode::Sharp`] (used while the canvas zoom is at rest) replaces the box filter between
+//! 1 and 2 texels per pixel (zoom 0.5 to 1) by a Catmull-Rom kernel scaled to the pixel
+//! footprint: a box filter is visibly soft near ratio 1 (at 0.9 every glyph stem is smeared over
+//! two pixels), plain bilinear filtering is soft *and* uneven (the blur depends on the sample
+//! phase, so it changes across the window and while panning), while the Catmull-Rom kernel keeps
+//! edges crisp with a slight overshoot. It reads up to `(2 · ceil(2k))²` texels per pixel (64 at
+//! zoom 0.5), which is why it is only used at rest: windows whose client re-renders at the zoomed
+//! scale (`crate::layout::client_scale`) are drawn 1:1 and need no filter at all, so at rest the
+//! kernel only runs for clients that do not follow the scale.
 
 use std::cell::Cell;
 
@@ -38,9 +48,29 @@ pub const MIN_MINIFICATION: f64 = 1.25;
 /// Most taps per axis (must match `NIRI_MAX_TAPS` in `minify.frag`).
 pub const MAX_TAPS: u32 = 8;
 
+/// Largest minification (texels per pixel) that the Catmull-Rom kernel handles: its support is
+/// `2k` texels on either side, `2 · ceil(2k)` ≤ [`MAX_TAPS`] taps per axis.
+pub const MAX_SHARP_MINIFICATION: f64 = 2.0;
+
+/// Minification below which [`MinifyMode::Sharp`] draws with the default shader: a buffer drawn
+/// 1:1 (or magnified) needs no filter.
+pub const SHARP_THRESHOLD: f64 = 1.01;
+
+/// How a [`MinifyRenderElement`] filters minified textures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MinifyMode {
+    /// Plain bilinear filtering (the renderer's default).
+    Off,
+    /// Box filter (supersampling) above [`MIN_MINIFICATION`]; cheap, used while zooming.
+    Box,
+    /// Catmull-Rom kernel from [`SHARP_THRESHOLD`] up to [`MAX_SHARP_MINIFICATION`], box filter
+    /// above; used while the zoom is at rest.
+    Sharp,
+}
+
 thread_local! {
-    /// Whether a [`MinifyRenderElement`] is drawing right now (on this thread).
-    static ACTIVE: Cell<bool> = const { Cell::new(false) };
+    /// Mode of the [`MinifyRenderElement`] drawing right now (on this thread).
+    static ACTIVE: Cell<MinifyMode> = const { Cell::new(MinifyMode::Off) };
 }
 
 /// Shaders for minified drawing; `None` where compiling failed (e.g. no
@@ -55,7 +85,11 @@ pub struct MinifyPrograms {
 
 impl MinifyPrograms {
     pub fn compile(renderer: &mut GlesRenderer) -> Self {
-        let taps = UniformName::new("niri_taps", UniformType::_1f);
+        let taps = [
+            UniformName::new("niri_taps", UniformType::_1f),
+            UniformName::new("niri_mode", UniformType::_1f),
+            UniformName::new("niri_k", UniformType::_2f),
+        ];
 
         let texture = renderer
             .compile_custom_texture_shader(
@@ -63,7 +97,7 @@ impl MinifyPrograms {
                     include_str!("shaders/minify_texture.frag"),
                     include_str!("shaders/minify.frag"),
                 ),
-                std::slice::from_ref(&taps),
+                &taps,
             )
             .map_err(|err| warn!("error compiling minify texture shader: {err:?}"))
             .ok();
@@ -77,7 +111,9 @@ impl MinifyPrograms {
                         UniformName::new("geo_size", UniformType::_2f),
                         UniformName::new("corner_radius", UniformType::_4f),
                         UniformName::new("input_to_geo", UniformType::Matrix3x3),
-                        taps,
+                        taps[0].clone(),
+                        taps[1].clone(),
+                        taps[2].clone(),
                     ],
                 )
                 .map_err(|err| warn!("error compiling minify clipped surface shader: {err:?}"))
@@ -136,6 +172,58 @@ pub fn minify_taps(src: Rectangle<f64, Buffer>, dst: Rectangle<i32, Physical>) -
     (k.ceil() as u32).clamp(2, MAX_TAPS)
 }
 
+/// Filter for drawing the `src` part of a buffer with `transform` into `dst` in `mode`: `None`
+/// for the default shader, else the uniforms of the minifying shaders.
+pub fn filter_uniforms(
+    mode: MinifyMode,
+    src: Rectangle<f64, Buffer>,
+    dst: Rectangle<i32, Physical>,
+    transform: Transform,
+) -> Option<Vec<Uniform<'static>>> {
+    let uniforms = |taps: u32, sharp: bool, k: (f64, f64)| {
+        vec![
+            Uniform::new("niri_taps", taps as f32),
+            Uniform::new("niri_mode", if sharp { 1f32 } else { 0f32 }),
+            Uniform::new("niri_k", (k.0 as f32, k.1 as f32)),
+        ]
+    };
+    match mode {
+        MinifyMode::Off => None,
+        MinifyMode::Box => {
+            let taps = minify_taps(src, dst);
+            (taps > 1).then(|| uniforms(taps, false, (1., 1.)))
+        }
+        MinifyMode::Sharp => {
+            let (kx, ky) = minification(src, dst, transform)?;
+            let k = kx.max(ky);
+            if k <= SHARP_THRESHOLD {
+                None
+            } else if k <= MAX_SHARP_MINIFICATION {
+                Some(uniforms(1, true, (kx.max(1.), ky.max(1.))))
+            } else {
+                let taps = minify_taps(src, dst);
+                (taps > 1).then(|| uniforms(taps, false, (1., 1.)))
+            }
+        }
+    }
+}
+
+/// Texels per output pixel along the buffer's x and y axes.
+pub fn minification(
+    src: Rectangle<f64, Buffer>,
+    dst: Rectangle<i32, Physical>,
+    transform: Transform,
+) -> Option<(f64, f64)> {
+    // The destination size along the buffer axes (90° transforms swap them).
+    let dst = transform.transform_size(dst.size);
+    if dst.w <= 0 || dst.h <= 0 || !(src.size.w > 0. && src.size.h > 0.) {
+        return None;
+    }
+    let kx = src.size.w / f64::from(dst.w);
+    let ky = src.size.h / f64::from(dst.h);
+    (kx.is_finite() && ky.is_finite()).then_some((kx, ky))
+}
+
 /// Program and uniforms for a clipped surface: its own, or the minifying variant while a
 /// [`MinifyRenderElement`] draws and the surface is drawn minified.
 pub fn clipped_program(
@@ -144,17 +232,14 @@ pub fn clipped_program(
     mut uniforms: Vec<Uniform<'static>>,
     src: Rectangle<f64, Buffer>,
     dst: Rectangle<i32, Physical>,
+    transform: Transform,
 ) -> (GlesTexProgram, Vec<Uniform<'static>>) {
-    if !ACTIVE.get() {
+    let Some(extra) = filter_uniforms(ACTIVE.get(), src, dst, transform) else {
         return (program.clone(), uniforms);
-    }
-    let taps = minify_taps(src, dst);
-    if taps <= 1 {
-        return (program.clone(), uniforms);
-    }
+    };
     match &Shaders::get_from_frame(frame).minify.clipped_surface {
         Some(minify) => {
-            uniforms.push(Uniform::new("niri_taps", taps as f32));
+            uniforms.extend(extra);
             (minify.clone(), uniforms)
         }
         None => (program.clone(), uniforms),
@@ -166,22 +251,32 @@ pub fn clipped_program(
 #[derive(Debug)]
 pub struct MinifyRenderElement<E> {
     inner: E,
-    enabled: bool,
+    mode: MinifyMode,
 }
 
 impl<E> MinifyRenderElement<E> {
-    /// Wraps `inner`; with `enabled == false` it draws exactly like `inner`.
+    /// Wraps `inner` with the box filter; with `enabled == false` it draws exactly like `inner`.
     pub fn new(inner: E, enabled: bool) -> Self {
-        Self { inner, enabled }
+        let mode = if enabled {
+            MinifyMode::Box
+        } else {
+            MinifyMode::Off
+        };
+        Self { inner, mode }
+    }
+
+    /// Wraps `inner` with the given filter mode.
+    pub fn with_mode(inner: E, mode: MinifyMode) -> Self {
+        Self { inner, mode }
     }
 }
 
 /// Sets [`ACTIVE`] for the lifetime of the guard.
-struct ActiveGuard(bool);
+struct ActiveGuard(MinifyMode);
 
 impl ActiveGuard {
-    fn enter() -> Self {
-        Self(ACTIVE.replace(true))
+    fn enter(mode: MinifyMode) -> Self {
+        Self(ACTIVE.replace(mode))
     }
 }
 
@@ -191,23 +286,17 @@ impl Drop for ActiveGuard {
     }
 }
 
-impl<E> MinifyRenderElement<E> {
-    /// Minifying program and taps for drawing `src` into `dst`, if minification applies.
+impl<E: Element> MinifyRenderElement<E> {
+    /// Minifying program and uniforms for drawing `src` into `dst`, if minification applies.
     fn program(
         &self,
         frame: &mut GlesFrame<'_, '_>,
         src: Rectangle<f64, Buffer>,
         dst: Rectangle<i32, Physical>,
-    ) -> Option<(GlesTexProgram, u32)> {
-        if !self.enabled {
-            return None;
-        }
-        let taps = minify_taps(src, dst);
-        if taps <= 1 {
-            return None;
-        }
+    ) -> Option<(GlesTexProgram, Vec<Uniform<'static>>)> {
+        let uniforms = filter_uniforms(self.mode, src, dst, self.inner.transform())?;
         let program = Shaders::get_from_frame(frame).minify.texture.clone()?;
-        Some((program, taps))
+        Some((program, uniforms))
     }
 }
 
@@ -267,15 +356,17 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for MinifyRende
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
-        let Some((program, taps)) = self.program(frame, src, dst) else {
+        let Some((program, uniforms)) = self.program(frame, src, dst) else {
+            // Nested clipped surfaces still pick their filter from the mode.
+            let _guard = ActiveGuard::enter(self.mode);
             return self
                 .inner
                 .draw(frame, src, dst, damage, opaque_regions, cache);
         };
 
-        frame.override_default_tex_program(program, vec![Uniform::new("niri_taps", taps as f32)]);
+        frame.override_default_tex_program(program, uniforms);
         let res = {
-            let _guard = ActiveGuard::enter();
+            let _guard = ActiveGuard::enter(self.mode);
             self.inner
                 .draw(frame, src, dst, damage, opaque_regions, cache)
         };
@@ -285,7 +376,7 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for MinifyRende
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         // A minified element must be composited (with the minifying shader), not scanned out.
-        if self.enabled {
+        if self.mode != MinifyMode::Off {
             None
         } else {
             self.inner.underlying_storage(renderer)
@@ -315,7 +406,8 @@ impl<'render, E: RenderElement<TtyRenderer<'render>>> RenderElement<TtyRenderer<
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), TtyRendererError<'render>> {
-        let Some((program, taps)) = self.program(frame.as_gles_frame(), src, dst) else {
+        let Some((program, uniforms)) = self.program(frame.as_gles_frame(), src, dst) else {
+            let _guard = ActiveGuard::enter(self.mode);
             return self
                 .inner
                 .draw(frame, src, dst, damage, opaque_regions, cache);
@@ -323,9 +415,9 @@ impl<'render, E: RenderElement<TtyRenderer<'render>>> RenderElement<TtyRenderer<
 
         frame
             .as_gles_frame()
-            .override_default_tex_program(program, vec![Uniform::new("niri_taps", taps as f32)]);
+            .override_default_tex_program(program, uniforms);
         let res = {
-            let _guard = ActiveGuard::enter();
+            let _guard = ActiveGuard::enter(self.mode);
             self.inner
                 .draw(frame, src, dst, damage, opaque_regions, cache)
         };
@@ -337,7 +429,7 @@ impl<'render, E: RenderElement<TtyRenderer<'render>>> RenderElement<TtyRenderer<
         &self,
         renderer: &mut TtyRenderer<'render>,
     ) -> Option<UnderlyingStorage<'_>> {
-        if self.enabled {
+        if self.mode != MinifyMode::Off {
             None
         } else {
             self.inner.underlying_storage(renderer)

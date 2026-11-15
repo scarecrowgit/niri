@@ -66,6 +66,7 @@ use crate::window::mapped::MappedId;
 
 pub mod backend_ext;
 pub mod canvas_actions; // ashd
+pub mod canvas_cursor; // ashd
 pub mod canvas_pan_grab; // ashd
 pub mod click_grab;
 mod decor_actions; // ashd

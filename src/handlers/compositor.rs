@@ -40,9 +40,8 @@ impl CompositorHandler for State {
             root = parent;
         }
 
-        if let Some(output) = self.niri.output_for_root(&root) {
-            let scale = output.current_scale();
-            let transform = output.current_transform();
+        // ashd: the window's scale (it follows the zoom on a canvas).
+        if let Some((scale, transform)) = self.niri.scale_transform_for_root(&root) {
             with_states(surface, |data| {
                 send_scale_transform(surface, data, scale, transform);
             });
@@ -343,6 +342,18 @@ impl CompositorHandler for State {
                 // The toplevel remains mapped.
                 self.niri.window_mru_ui.update_window(&self.niri.layout, id);
                 self.niri.layout.update_window(&window, serial);
+
+                // ashd: clients that resize themselves when asked to render at the canvas zoom
+                // keep the output scale from now on.
+                if let Some((mapped, _)) = self.niri.layout.find_window_and_output(surface) {
+                    if mapped.check_scale_resize() {
+                        warn!(
+                            "window {:?} changed its size after a scale change, \
+                             keeping it at the output scale on zoomed canvases",
+                            mapped.id()
+                        );
+                    }
+                }
 
                 // Move the toplevel according to the attach offset.
                 if let Some(delta) = buffer_delta {

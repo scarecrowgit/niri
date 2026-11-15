@@ -87,6 +87,10 @@ pub struct WindowRule {
     /// ashd: show (or hide) the compositor-drawn title bar.
     #[knuffel(child, unwrap(argument))]
     pub title_bar: Option<bool>,
+    /// ashd: whether the window renders at the canvas zoom (`layout.canvas.rescale-clients`);
+    /// `false` keeps the output scale for clients that misbehave below scale 1.
+    #[knuffel(child, unwrap(argument))]
+    pub rescale_on_canvas: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

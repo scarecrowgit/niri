@@ -239,8 +239,14 @@ impl RenderElement<GlesRenderer> for ClippedSurfaceRenderElement<GlesRenderer> {
         cache: Option<&UserDataMap>,
     ) -> Result<(), GlesError> {
         // ashd: minifying variant on zoomed-out canvases.
-        let (program, uniforms) =
-            super::minify::clipped_program(frame, &self.program, self.compute_uniforms(), src, dst);
+        let (program, uniforms) = super::minify::clipped_program(
+            frame,
+            &self.program,
+            self.compute_uniforms(),
+            src,
+            dst,
+            self.inner.transform(),
+        );
         frame.override_default_tex_program(program, uniforms);
         RenderElement::<GlesRenderer>::draw(
             &self.inner,
@@ -282,6 +288,7 @@ impl<'render> RenderElement<TtyRenderer<'render>>
             self.compute_uniforms(),
             src,
             dst,
+            self.inner.transform(),
         );
         gles_frame.override_default_tex_program(program, uniforms);
         RenderElement::draw(&self.inner, frame, src, dst, damage, opaque_regions, cache)?;
