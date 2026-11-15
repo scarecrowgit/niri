@@ -1201,6 +1201,13 @@ one. With the option:
 - Name-, id- and up/down references, `move-workspace-to-index N` and output moves are unchanged
   (they still clamp). When a monitor is removed, its empty workspaces are dropped like upstream
   (only workspaces with windows or a name move to another monitor).
+- With `empty-workspace-above-first`, index 1 is the empty workspace above (as without the
+  option) and the "1 or 3+ workspaces" rule holds: on an all-empty monitor (a single workspace)
+  `focus-workspace 2` gives an empty one above, workspace 2 and an empty one at the end, which
+  is the upstream shape once a window opens on it; leaving it goes back to the single
+  workspace. Moving a window to index 1 inserts a new empty workspace above, so every number
+  shifts by one, like upstream. Turning `empty-workspace-above-first` on or off at runtime
+  shifts the numbers by one, like upstream.
 - A layout option like `empty-workspace-above-first`: it merges per output
   (`output { layout { … } }`) and is rejected in `workspace "x" { layout { … } }`. Turning it
   off at runtime removes the empty workspaces in the middle right away (after a running
@@ -1219,8 +1226,10 @@ is on), `src/layout/mod.rs` (`mod ws_by_index`; `remove_window` runs the by-inde
 instead of removing the emptied workspace), `niri-config/src/{layout,workspace,lib}.rs`
 (option, per-workspace rejection, parse test, parse snapshot). Tests:
 `src/layout/tests/ws_by_index.rs` (focused tests and `WsIndexOp`, index references resolved
-like the input code), `src/layout/tests.rs` (`Op::WsIndex`, the option in
-`arbitrary_layout_part`, so it is randomized for the layout, per output and through
+like the input code; `above_first_*`: the combination with `empty-workspace-above-first`, with
+the hidden scratchpad, a fullscreen workspace, per output and toggled at runtime),
+`src/layout/tests.rs` (`Op::WsIndex`, the option in `arbitrary_layout_part`, so it is
+randomized for the layout, per output and through
 `Op::UpdateConfig`; an `UpdateConfig` turning it on and `WsIndex(Focus(4))` in both exhaustive
 op lists).
 

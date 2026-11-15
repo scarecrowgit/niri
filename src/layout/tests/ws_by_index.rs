@@ -96,7 +96,8 @@ fn monitor_for(layout: &Layout<TestWindow>, output: usize) -> &Monitor<TestWindo
         .unwrap()
 }
 
-/// Per workspace of the output, top to bottom: the window ids, `h` for a hidden workspace.
+/// Per workspace of the output, top to bottom: the window ids, `h` for a hidden workspace, `F`
+/// for a fullscreen workspace.
 fn shape(layout: &Layout<TestWindow>, output: usize) -> Vec<String> {
     monitor_for(layout, output)
         .workspaces
@@ -107,6 +108,8 @@ fn shape(layout: &Layout<TestWindow>, output: usize) -> Vec<String> {
             let ids = ids.join(",");
             if ws.is_hidden() {
                 format!("h{ids}")
+            } else if ws.fullscreen_slot().is_some() {
+                format!("F{ids}")
             } else {
                 ids
             }
@@ -556,4 +559,491 @@ fn with_empty_workspace_above_first() {
 
     check_ops_on_layout(&mut layout, [Op::CloseWindow(2), Op::CompleteAnimations]);
     assert_eq!(shape(&layout, 1), ["", "1", ""]);
+}
+
+fn above_first_by_index() -> Options {
+    Options {
+        layout: niri_config::Layout {
+            create_workspaces_by_index: true,
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+/// Regression (proptest): with every workspace empty there is just one; creating workspace 2
+/// must not leave exactly two (the `empty-workspace-above-first` "1 or 3+" invariant).
+#[test]
+fn above_first_focus_2_on_fresh_output() {
+    let mut layout = check_ops([
+        Op::AddScaledOutput {
+            id: 1,
+            scale: 1.,
+            layout_config: Some(Box::new(niri_config::LayoutPart {
+                empty_workspace_above_first: Some(Flag(true)),
+                create_workspaces_by_index: Some(Flag(true)),
+                ..Default::default()
+            })),
+        },
+        Op::FocusWorkspace(1),
+    ]);
+    // Workspace 2 between the empty one above and the empty one at the end.
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+}
+
+fn above_first_part(above_first: bool) -> Box<niri_config::LayoutPart> {
+    Box::new(niri_config::LayoutPart {
+        empty_workspace_above_first: Some(Flag(above_first)),
+        create_workspaces_by_index: Some(Flag(true)),
+        ..Default::default()
+    })
+}
+
+fn move_window(window_id: Option<usize>, index: u8, focus: bool) -> Op {
+    Op::WsIndex(WsIndexOp::MoveWindow {
+        window_id,
+        index,
+        focus,
+    })
+}
+
+fn ipc_idx_of_active(layout: &Layout<TestWindow>, output: usize) -> u8 {
+    let mon = monitor_for(layout, output);
+    layout.ipc_workspace_idx(Some(mon), mon.active_workspace_idx)
+}
+
+#[test]
+fn above_first_focus_on_fresh_output() {
+    let mut layout = check_ops_with_options(above_first_by_index(), [Op::AddOutput(1), focus(1)]);
+    assert_eq!(shape(&layout, 1), [""]);
+
+    // Workspace 2 is the first real one: an empty one above it and an empty one after it.
+    check_ops_on_layout(&mut layout, [focus(2)]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+    assert_eq!(ipc_idx_of_active(&layout, 1), 2);
+    check_ops_on_layout(&mut layout, [Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+
+    // A window opened there gives the upstream shape.
+    check_ops_on_layout(&mut layout, [window(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "1", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    // Closing it while focused keeps the focused workspace; leaving it goes back to one.
+    check_ops_on_layout(&mut layout, [Op::CloseWindow(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+    check_ops_on_layout(&mut layout, [focus(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), [""]);
+    assert_eq!(active_idx(&layout, 1), 0);
+
+    // Leaving workspace 2 to the last workspace (before the switch ends) also trims to one.
+    check_ops_on_layout(&mut layout, [focus(2), focus(3), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 2);
+    check_ops_on_layout(&mut layout, [focus(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), [""]);
+
+    // Workspace 3 from the fresh state, a window there, back to 1: 2 stays in the middle.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            focus(3),
+            Op::CompleteAnimations,
+            window(2),
+            focus(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", "2", ""]);
+    let mon = monitor_for(&layout, 1);
+    assert_eq!(layout.ipc_workspace_idx(Some(mon), 2), 3);
+
+    // Closing the only window: back to the single workspace.
+    check_ops_on_layout(&mut layout, [Op::CloseWindow(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), [""]);
+    assert_eq!(active_idx(&layout, 1), 0);
+}
+
+#[test]
+fn above_first_without_by_index_clamps() {
+    // The same references without create-workspaces-by-index (for comparison).
+    let options = Options {
+        layout: niri_config::Layout {
+            empty_workspace_above_first: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut layout = check_ops_with_options(options, [Op::AddOutput(1), focus(2)]);
+    assert_eq!(shape(&layout, 1), [""]);
+    check_ops_on_layout(&mut layout, [window(1), focus(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "1", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+}
+
+#[test]
+fn above_first_auto_back_and_forth_on_fresh_output() {
+    let mut layout = check_ops_with_options(
+        above_first_by_index(),
+        [
+            Op::AddOutput(1),
+            Op::WsIndex(WsIndexOp::FocusAutoBackAndForth(2)),
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    // Same workspace again: back to workspace 1, which trims back to one workspace.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::CompleteAnimations,
+            Op::WsIndex(WsIndexOp::FocusAutoBackAndForth(2)),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), [""]);
+    assert_eq!(active_idx(&layout, 1), 0);
+}
+
+#[test]
+fn above_first_raw_indices_on_fresh_output() {
+    // Every target index from the all-empty state (real indices, as the randomized ops use).
+    for idx in 0..6 {
+        let mut layout = check_ops_with_options(
+            above_first_by_index(),
+            [Op::AddOutput(1), Op::FocusWorkspace(idx)],
+        );
+        let len = monitor_for(&layout, 1).workspaces.len();
+        assert_eq!(
+            len,
+            if idx == 0 { 1 } else { (idx + 1).max(3) },
+            "idx {idx}"
+        );
+        assert_eq!(active_idx(&layout, 1), idx);
+        check_ops_on_layout(
+            &mut layout,
+            [
+                Op::CompleteAnimations,
+                Op::FocusWorkspace(0),
+                Op::CompleteAnimations,
+            ],
+        );
+        assert_eq!(shape(&layout, 1), [""], "idx {idx}");
+    }
+}
+
+#[test]
+fn above_first_nothing_to_move_creates_nothing() {
+    let layout = check_ops_with_options(
+        above_first_by_index(),
+        [
+            Op::AddOutput(1),
+            move_window(None, 2, true),
+            move_window(None, 4, false),
+            Op::WsIndex(WsIndexOp::MoveColumn(2, true)),
+            Op::WsIndex(WsIndexOp::MoveColumn(5, false)),
+        ],
+    );
+    assert_eq!(shape(&layout, 1), [""]);
+}
+
+#[test]
+fn above_first_move_window_and_column() {
+    let mut layout = check_ops_with_options(
+        above_first_by_index(),
+        [
+            Op::AddOutput(1),
+            window(1),
+            window(2),
+            move_window(None, 5, false),
+            Op::CompleteAnimations,
+        ],
+    );
+    // Window 2 (focused) moved to workspace 5, focus stays on workspace 2.
+    assert_eq!(shape(&layout, 1), ["", "1", "", "", "2", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::WsIndex(WsIndexOp::MoveColumn(3, true)),
+            Op::CompleteAnimations,
+        ],
+    );
+    // Workspace 2 is now empty but stays: later workspaces are in use.
+    assert_eq!(shape(&layout, 1), ["", "", "1", "", "2", ""]);
+    assert_eq!(active_idx(&layout, 1), 2);
+
+    // Moving window 2 out of the highest workspace trims the ones after workspace 3.
+    check_ops_on_layout(
+        &mut layout,
+        [move_window(Some(2), 3, false), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", "1,2", ""]);
+
+    // Moving to workspace 1, the empty one above the first, inserts a new one above it like
+    // upstream.
+    check_ops_on_layout(
+        &mut layout,
+        [move_window(Some(1), 1, true), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", "1", "", "2", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    // Closing every window ends with the single empty workspace.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::CloseWindow(1),
+            Op::CloseWindow(2),
+            focus(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), [""]);
+}
+
+#[test]
+fn above_first_move_window_after_windows_closed() {
+    let mut layout = check_ops_with_options(
+        above_first_by_index(),
+        [
+            Op::AddOutput(1),
+            window(1),
+            Op::CloseWindow(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    // The focused workspace 2 stays after its window closed.
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    check_ops_on_layout(&mut layout, [focus(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), [""]);
+
+    // A window on the single workspace moves it below a new empty one; moving it on by index.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            window(2),
+            move_window(None, 4, true),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", "", "2", ""]);
+    assert_eq!(active_idx(&layout, 1), 3);
+    check_ops_on_layout(
+        &mut layout,
+        [move_window(None, 2, true), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", "2", ""]);
+}
+
+#[test]
+fn above_first_with_hidden_workspace() {
+    let mut layout = check_ops_with_options(above_first_by_index(), [Op::AddOutput(1), hidden(9)]);
+    assert_eq!(shape(&layout, 1), ["", "h", ""]);
+
+    // Visible: 1 (above), 2 (end). Index 2 exists; index 3 is created after it.
+    check_ops_on_layout(&mut layout, [focus(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "h", ""]);
+    assert_eq!(active_idx(&layout, 1), 2);
+    check_ops_on_layout(&mut layout, [focus(4), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "h", "", "", ""]);
+    assert_eq!(ipc_idx_of_active(&layout, 1), 4);
+
+    check_ops_on_layout(&mut layout, [window(1), focus(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "h", "", "", "1", ""]);
+
+    // Hiding the window: the hidden workspace doesn't keep the ones before it.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::Scratch(ScratchOp::HideWindow { id: Some(1) }),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "h1", ""]);
+
+    // From a fresh output with a hidden workspace too.
+    let mut layout = check_ops_with_options(
+        above_first_by_index(),
+        [
+            Op::AddOutput(1),
+            hidden(9),
+            focus(3),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "h", "", ""]);
+    assert_eq!(ipc_idx_of_active(&layout, 1), 3);
+    check_ops_on_layout(
+        &mut layout,
+        [
+            window(1),
+            move_window(None, 2, true),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "h", "1", ""]);
+    check_ops_on_layout(
+        &mut layout,
+        [Op::CloseWindow(1), focus(1), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", "h", ""]);
+}
+
+#[test]
+fn above_first_with_fullscreen_workspace() {
+    let options = Options {
+        layout: niri_config::Layout {
+            create_workspaces_by_index: true,
+            empty_workspace_above_first: true,
+            fullscreen_workspaces: true,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut layout = check_ops_with_options(
+        options,
+        [
+            Op::AddOutput(1),
+            window(1),
+            Op::FullscreenWindow(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", "F1", ""]);
+
+    // Visible: 1 (above), 2 (origin), 3 (end); the fullscreen workspace has no number.
+    check_ops_on_layout(&mut layout, [focus(4), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", "F1", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 4);
+    assert_eq!(ipc_idx_of_active(&layout, 1), 4);
+
+    check_ops_on_layout(&mut layout, [window(2), focus(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", "F1", "", "2", ""]);
+
+    // Moving the window of workspace 4 to 2 trims everything after the fullscreen workspace.
+    check_ops_on_layout(
+        &mut layout,
+        [move_window(Some(2), 2, false), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", "2", "F1", ""]);
+
+    // Back from fullscreen to the origin; closing everything ends with one workspace.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            Op::FullscreenWindow(1),
+            Op::CompleteAnimations,
+            Op::CloseWindow(1),
+            Op::CloseWindow(2),
+            focus(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), [""]);
+
+    // Fullscreen on workspace 2 created by index from the fresh state.
+    check_ops_on_layout(
+        &mut layout,
+        [
+            focus(2),
+            window(3),
+            Op::FullscreenWindow(3),
+            Op::CompleteAnimations,
+            focus(5),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", "F3", "", "", ""]);
+    assert_eq!(ipc_idx_of_active(&layout, 1), 5);
+}
+
+#[test]
+fn above_first_per_output() {
+    // Output 2 has empty-workspace-above-first, output 1 doesn't; both create by index.
+    let mut layout = check_ops_with_options(
+        by_index(),
+        [
+            Op::AddOutput(1),
+            Op::AddScaledOutput {
+                id: 2,
+                scale: 1.,
+                layout_config: Some(above_first_part(true)),
+            },
+            Op::FocusOutput(2),
+            focus(2),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 2), ["", "", ""]);
+    assert_eq!(shape(&layout, 1), [""]);
+
+    check_ops_on_layout(
+        &mut layout,
+        [
+            window(2),
+            Op::FocusOutput(1),
+            focus(2),
+            window(1),
+            Op::CompleteAnimations,
+        ],
+    );
+    assert_eq!(shape(&layout, 1), ["", "1", ""]);
+    assert_eq!(shape(&layout, 2), ["", "2", ""]);
+
+    // move-window-to-workspace by id counts on the window's monitor.
+    check_ops_on_layout(
+        &mut layout,
+        [move_window(Some(2), 4, false), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 2), ["", "", "", "2", ""]);
+    assert_eq!(shape(&layout, 1), ["", "1", ""]);
+
+    // Removing output 2: only used workspaces move over.
+    check_ops_on_layout(&mut layout, [Op::RemoveOutput(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "1", "2", ""]);
+}
+
+#[test]
+fn above_first_toggled_at_runtime() {
+    let mut layout = check_ops_with_options(
+        by_index(),
+        [Op::AddOutput(1), focus(2), Op::CompleteAnimations],
+    );
+    assert_eq!(shape(&layout, 1), ["", ""]);
+    assert_eq!(active_idx(&layout, 1), 1);
+
+    // Turning it on adds the empty workspace above (numbers shift by one, like upstream).
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UpdateConfig {
+            layout_config: above_first_part(true),
+        }],
+    );
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+    assert_eq!(active_idx(&layout, 1), 2);
+    check_ops_on_layout(&mut layout, [focus(1), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), [""]);
+    check_ops_on_layout(&mut layout, [focus(2), Op::CompleteAnimations]);
+    assert_eq!(shape(&layout, 1), ["", "", ""]);
+
+    // Turning it off removes the empty workspace above.
+    check_ops_on_layout(
+        &mut layout,
+        [Op::UpdateConfig {
+            layout_config: above_first_part(false),
+        }],
+    );
+    assert_eq!(shape(&layout, 1), ["", ""]);
+    assert_eq!(active_idx(&layout, 1), 0);
 }

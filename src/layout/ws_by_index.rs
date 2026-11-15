@@ -13,6 +13,10 @@
 //!
 //! Hidden (scratchpad) workspaces are named, so they are never removed, and they don't keep the
 //! empty workspaces before them alive either: they don't count for numbering.
+//!
+//! With `empty-workspace-above-first` index 1 is the empty workspace above, and creating
+//! workspace 2 on an all-empty monitor (one workspace) also adds the empty one at the end, so the
+//! monitor never has exactly two workspaces.
 
 use super::monitor::Monitor;
 use super::LayoutElement;
@@ -29,6 +33,14 @@ impl<W: LayoutElement> Monitor<W> {
             return;
         }
         while self.workspaces.len() <= idx {
+            self.add_workspace_bottom();
+        }
+
+        // With empty-workspace-above-first a monitor has 1 or 3+ workspaces: the single
+        // workspace of an all-empty monitor is both the empty one above the first and the empty
+        // one at the end. Creating index 1 from there makes workspace 2 the first real one, so
+        // it needs an empty workspace after it (like upstream once a window opens on it).
+        if self.options.layout.empty_workspace_above_first && self.workspaces.len() == 2 {
             self.add_workspace_bottom();
         }
     }
