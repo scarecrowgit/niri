@@ -72,7 +72,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{Client, Display, DisplayHandle, Resource};
 use smithay::utils::{
     Buffer as BufferCoords, ClockSource, IsAlive as _, Logical, Monotonic, Physical, Point,
-    Rectangle, Scale, Size, Transform, SERIAL_COUNTER,
+    Rectangle, Scale, Serial, Size, Transform, SERIAL_COUNTER,
 };
 use smithay::wayland::background_effect::BackgroundEffectState;
 use smithay::wayland::compositor::{
@@ -346,6 +346,10 @@ pub struct Niri {
     pub security_context_state: SecurityContextState,
     pub gamma_control_manager_state: GammaControlManagerState,
     pub activation_state: XdgActivationState,
+    /// ashd: per client, the serial of the keyboard focus change that last took the keyboard
+    /// from it (the recent-windows switcher taking it counts), and when. Activation tokens with
+    /// an older serial are refused (see `token_created()`).
+    pub keyboard_focus_left: HashMap<ClientId, (Serial, Instant)>,
     pub mutter_x11_interop_state: MutterX11InteropManagerState,
 
     // This will not work as is outside of tests, so it is gated with #[cfg(test)] for now. In
@@ -1241,7 +1245,11 @@ impl State {
     /// warp.
     pub fn focus_window(&mut self, window: &Window) {
         let active_output = self.niri.layout.active_output().cloned();
+        self.focus_window_from(window, active_output);
+    }
 
+    /// ashd: [`Self::focus_window`] with the output that was active before.
+    fn focus_window_from(&mut self, window: &Window, active_output: Option<Output>) {
         self.niri.layout.activate_window(window);
         // ashd: keyboard/IPC focus recentres a canvas view on the window.
         self.niri.layout.canvas_reveal_window(window);
@@ -1264,13 +1272,22 @@ impl State {
 
     pub fn confirm_mru(&mut self) {
         if let Some(window) = self.niri.close_mru(MruCloseRequest::Confirm) {
+            // ashd: activate the chosen window before the keyboard focus update below, so the
+            // keyboard goes from the switcher straight to it. Updating first gave the keyboard
+            // back to the window focused before the switcher for a moment (enter, then leave),
+            // and clients that answer an enter by activating themselves (Claude Desktop,
+            // Electron) undid the switch.
+            let active_output = self.niri.layout.active_output().cloned();
+            self.niri.layout.activate_window(&window);
+            self.niri.layer_shell_on_demand_focus = None;
+
             // focus_window() will warp the cursor to the window only when the keyboard focus is on
             // the layout. However, right now the keyboard focus is still on the MRU (that we had
             // just closed) since it's only updated at the end of the event loop cycle. Force-update
             // the keyboard focus here to make cursor warping work.
             self.update_keyboard_focus();
 
-            self.focus_window(&window);
+            self.focus_window_from(&window, active_output);
         }
     }
 
@@ -1640,8 +1657,18 @@ impl State {
                 }
             }
 
+            // ashd: remember when the keyboard leaves a client (for anything else than its own
+            // surfaces: the switcher and "no focus" count).
+            let serial = SERIAL_COUNTER.next_serial();
+            let old_client = self.niri.keyboard_focus.surface().and_then(|s| s.client());
+            if let Some(old_client) = old_client {
+                if focus.surface().and_then(|s| s.client()).as_ref() != Some(&old_client) {
+                    self.niri.note_keyboard_focus_left(old_client.id(), serial);
+                }
+            }
+
             self.niri.keyboard_focus.clone_from(&focus);
-            keyboard.set_focus(self, focus.into_surface(), SERIAL_COUNTER.next_serial());
+            keyboard.set_focus(self, focus.into_surface(), serial);
 
             // FIXME: can be more granular.
             self.niri.queue_redraw_all();
@@ -3033,6 +3060,7 @@ impl Niri {
             security_context_state,
             gamma_control_manager_state,
             activation_state,
+            keyboard_focus_left: HashMap::new(),
             mutter_x11_interop_state,
             #[cfg(test)]
             single_pixel_buffer_state,
@@ -7746,6 +7774,17 @@ impl Niri {
         {
             window.set_focus_timestamp(pending.stamp);
         }
+    }
+
+    /// ashd: see [`Niri::keyboard_focus_left`].
+    fn note_keyboard_focus_left(&mut self, client: ClientId, serial: Serial) {
+        if self.keyboard_focus_left.len() >= 64 {
+            let handle = self.display_handle.backend_handle();
+            self.keyboard_focus_left
+                .retain(|id, _| handle.get_client_data(id.clone()).is_ok());
+        }
+        self.keyboard_focus_left
+            .insert(client, (serial, Instant::now()));
     }
 
     pub fn queue_redraw_mru_output(&mut self) {

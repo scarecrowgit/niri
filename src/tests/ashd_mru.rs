@@ -1,11 +1,12 @@
 //! ashd: the recent-windows switcher with quick taps (Super+Tab tapped and released before the
-//! switcher shows), in strip and canvas workspaces.
+//! switcher shows), in strip and canvas workspaces, and from fullscreen workspaces.
 
 use niri_config::{Action, Config, WorkspaceReference};
 use smithay::backend::input::{InputEvent, InputTime, KeyState, Keycode};
+use wayland_client::protocol::wl_surface::WlSurface;
 
 use super::*;
-use crate::tests::client::ClientId;
+use crate::tests::client::{ClientId, KeyboardEvent};
 use crate::tests::test_input_backend::{TestInputBackend, TestKeyboardKeyEvent};
 
 // evdev + 8.
@@ -30,6 +31,10 @@ fn set_up(extra: &str) -> (Fixture, ClientId) {
 }
 
 fn open_window(f: &mut Fixture, id: ClientId) -> u64 {
+    open_window_with_surface(f, id).0
+}
+
+fn open_window_with_surface(f: &mut Fixture, id: ClientId) -> (u64, WlSurface) {
     let window = f.client(id).create_window();
     let surface = window.surface.clone();
     window.commit();
@@ -42,7 +47,7 @@ fn open_window(f: &mut Fixture, id: ClientId) -> u64 {
     f.double_roundtrip(id);
     f.niri_complete_animations();
 
-    f.niri().layout.focus().unwrap().id().get()
+    (f.niri().layout.focus().unwrap().id().get(), surface)
 }
 
 fn focused(f: &mut Fixture) -> Option<u64> {
@@ -207,4 +212,140 @@ fn scope_all_binds_reset_the_scope() {
     assert_eq!(focused(&mut f), Some(b));
     tap_super_tab(&mut f, id);
     assert_eq!(focused(&mut f), Some(c));
+}
+
+/// The window shown on the active workspace, and whether that workspace is a fullscreen one.
+fn shown(f: &mut Fixture) -> (Option<u64>, bool) {
+    let ws = f.niri().layout.active_workspace().unwrap();
+    let is_fullscreen_ws = ws.fullscreen_slot().is_some();
+    (focused(f), is_fullscreen_ws)
+}
+
+/// Like the desktop: `fs` alone on workspace 1, then fullscreen on a fullscreen workspace of its
+/// own; `a` and `b` on workspace 2, `b` used last before `fs`. `recent` goes into
+/// `recent-windows`. Also returns the surface of `fs`.
+fn set_up_fullscreen_workspace(recent: &str) -> (Fixture, ClientId, u64, u64, u64, WlSurface) {
+    let (mut f, id) = set_up(&format!(
+        r#"
+        layout {{
+            fullscreen-workspaces
+            create-workspaces-by-index
+        }}
+        workspace "scratch" {{
+            hidden
+        }}
+        recent-windows {{
+            debounce-ms 0
+            {recent}
+            binds {{
+                Mod+Tab {{ next-window scope="all"; }}
+                Mod+Shift+Tab {{ previous-window scope="all"; }}
+            }}
+        }}
+        "#
+    ));
+    let (fs, fs_surface) = open_window_with_surface(&mut f, id);
+    let a = open_window(&mut f, id);
+    let t = InputTime::from_micros(0);
+    f.niri_state().do_action(
+        Action::MoveWindowToWorkspace(WorkspaceReference::Index(2), true),
+        false,
+        t,
+    );
+    f.double_roundtrip(id);
+    let b = open_window(&mut f, id);
+    f.niri_state().do_action(Action::FocusWindow(fs), false, t);
+    f.double_roundtrip(id);
+    f.niri_state().do_action(Action::FullscreenWindow, false, t);
+    f.double_roundtrip(id);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(fs), true));
+    assert_eq!(
+        f.niri().layout.active_workspace().unwrap().id(),
+        f.niri()
+            .layout
+            .workspaces()
+            .find(|(_, _, ws)| ws.windows().any(|w| w.id().get() == fs))
+            .unwrap()
+            .2
+            .id()
+    );
+    (f, id, fs, a, b, fs_surface)
+}
+
+#[test]
+fn quick_taps_from_a_fullscreen_workspace() {
+    let (mut f, id, fs, _a, b, _) = set_up_fullscreen_workspace("");
+    tap_super_tab(&mut f, id);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(b), false));
+    tap_super_tab(&mut f, id);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(fs), true));
+}
+
+#[test]
+fn held_switcher_from_a_fullscreen_workspace() {
+    // The switcher shows right away (no open delay): Super is released while it is open.
+    let (mut f, id, fs, a, b, _) = set_up_fullscreen_workspace("open-delay-ms 0");
+    tap_super_tab(&mut f, id);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(b), false));
+    tap_super_tab(&mut f, id);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(fs), true));
+
+    // Two Tabs: the window used before `b`.
+    key(&mut f, id, LWIN, true);
+    for _ in 0..2 {
+        key(&mut f, id, TAB, true);
+        key(&mut f, id, TAB, false);
+    }
+    key(&mut f, id, LWIN, false);
+    f.niri_complete_animations();
+    assert_eq!(shown(&mut f), (Some(a), false));
+}
+
+/// Keyboard enters and leaves `surface` got since the last call.
+fn enters_and_leaves(f: &mut Fixture, id: ClientId, surface: &WlSurface) -> Vec<&'static str> {
+    f.client(id)
+        .state
+        .recent_keyboard_events(surface)
+        .filter_map(|event| match event {
+            KeyboardEvent::Enter { .. } => Some("enter"),
+            KeyboardEvent::Leave => Some("leave"),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn switching_away_does_not_hand_the_keyboard_back_for_a_moment() {
+    // The switcher took the keyboard from the fullscreen window; on release it gave it back to
+    // that window for a moment (enter, then leave in the same dispatch) before focusing the
+    // chosen one. Claude Desktop (Electron) answers the enter by activating itself, which undid
+    // every switch away from it (seen live: the target was focused, and 12-20 ms later the
+    // fullscreen window and its workspace were back).
+    for recent in ["", "open-delay-ms 0"] {
+        let (mut f, id, fs, _a, b, fs_surface) = set_up_fullscreen_workspace(recent);
+        let _ = enters_and_leaves(&mut f, id, &fs_surface);
+        tap_super_tab(&mut f, id);
+        f.niri_complete_animations();
+        assert_eq!(shown(&mut f), (Some(b), false));
+        assert_eq!(
+            enters_and_leaves(&mut f, id, &fs_surface),
+            ["leave"],
+            "{recent}"
+        );
+
+        // Going back still gives it the keyboard, once.
+        tap_super_tab(&mut f, id);
+        f.niri_complete_animations();
+        assert_eq!(shown(&mut f), (Some(fs), true));
+        assert_eq!(
+            enters_and_leaves(&mut f, id, &fs_surface),
+            ["enter"],
+            "{recent}"
+        );
+    }
 }

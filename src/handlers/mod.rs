@@ -85,6 +85,10 @@ use crate::utils::{output_size, send_scale_transform};
 
 pub const XDG_ACTIVATION_TOKEN_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// ashd: with `honor-xdg-activation-with-invalid-serial`, how long after the keyboard left a
+/// client its tokens with older serials are still refused (see `token_created()`).
+const FOCUS_LEFT_GRACE: Duration = Duration::from_secs(1);
+
 impl SeatHandler for State {
     type KeyboardFocus = WlSurface;
     type PointerFocus = WlSurface;
@@ -764,7 +768,27 @@ impl XdgActivationHandler for State {
         // notification daemon, but alas they ignore it. Maybe in the future the clients are fixed,
         // and we can remove this debug flag.
         let config = self.niri.config.borrow();
-        if config.debug.honor_xdg_activation_with_invalid_serial {
+        let honor_invalid_serial = config.debug.honor_xdg_activation_with_invalid_serial;
+        // ashd: a client can't take the focus back with a serial from before the keyboard left
+        // it, i.e. from input it got before the user switched away (the recent-windows switcher,
+        // focus-workspace, a click elsewhere). Electron apps (Claude Desktop) activate themselves
+        // when they get or lose the keyboard, which undid the switch. This also closes the
+        // pointer check below (the pointer usually still rests on that window) and, for a short
+        // while after the switch, `honor-xdg-activation-with-invalid-serial`: its clients
+        // (Discord, Telegram) activate themselves with old serials from a notification click,
+        // which comes much later.
+        if let Some(&(left, left_at)) = data
+            .client_id
+            .as_ref()
+            .and_then(|id| self.niri.keyboard_focus_left.get(id))
+        {
+            let from_before = serial == left || !serial.is_no_older_than(&left);
+            if from_before && (!honor_invalid_serial || left_at.elapsed() < FOCUS_LEFT_GRACE) {
+                return false;
+            }
+        }
+
+        if honor_invalid_serial {
             return true;
         }
 

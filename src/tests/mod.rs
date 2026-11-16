@@ -6,6 +6,7 @@ mod server;
 mod test_input_backend;
 
 mod animations;
+mod ashd_activation; // ashd
 mod ashd_edge_reveal; // ashd
 mod ashd_focus; // ashd
 mod ashd_mru; // ashd

@@ -14,6 +14,8 @@ use smithay::reexports::wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::
 use smithay::reexports::wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::zwp_keyboard_shortcuts_inhibitor_v1::{self, ZwpKeyboardShortcutsInhibitorV1};
 use smithay::reexports::wayland_protocols::wp::single_pixel_buffer;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
+use smithay::reexports::wayland_protocols::xdg::activation::v1::client::xdg_activation_token_v1::{self, XdgActivationTokenV1};
+use smithay::reexports::wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 use smithay::reexports::wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use smithay::reexports::wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
@@ -67,6 +69,11 @@ pub struct State {
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
     pub ksim: Option<ZwpKeyboardShortcutsInhibitManagerV1>,
+    // ashd: xdg-activation, the serial of the last keyboard / pointer event, and the tokens the
+    // compositor handed out (in order).
+    pub activation: Option<XdgActivationV1>,
+    pub last_serial: u32,
+    pub activation_tokens: Vec<String>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -286,6 +293,9 @@ impl Client {
             spbm: None,
             viewporter: None,
             ksim: None,
+            activation: None,
+            last_serial: 0,
+            activation_tokens: Vec::new(),
             windows: Vec::new(),
             layers: Vec::new(),
         };
@@ -462,6 +472,24 @@ impl State {
         let ksim = self.ksim.as_ref().unwrap();
         let seat = self.seats.keys().next().unwrap();
         ksim.inhibit_shortcuts(surface, seat, &self.qh, ())
+    }
+
+    /// ashd: asks for an activation token with `serial` (on the first seat) and `surface`; the
+    /// token lands in `activation_tokens` after a roundtrip.
+    pub fn request_activation_token(&self, serial: u32, surface: Option<&WlSurface>) {
+        let activation = self.activation.as_ref().unwrap();
+        let token = activation.get_activation_token(&self.qh, ());
+        token.set_serial(serial, self.seats.keys().next().unwrap());
+        if let Some(surface) = surface {
+            token.set_surface(surface);
+        }
+        token.commit();
+    }
+
+    /// ashd: activates `surface` with `token`.
+    pub fn activate(&self, token: &str, surface: &WlSurface) {
+        let activation = self.activation.as_ref().unwrap();
+        activation.activate(token.to_owned(), surface);
     }
 
     pub fn virtual_pointer(&mut self) -> ZwlrVirtualPointerV1 {
@@ -710,6 +738,9 @@ impl Dispatch<WlRegistry, ()> for State {
                         ZwpKeyboardShortcutsInhibitManagerV1::interface().version,
                     );
                     state.ksim = Some(registry.bind(name, version, qh, ()));
+                } else if interface == XdgActivationV1::interface().name {
+                    let version = min(version, XdgActivationV1::interface().version);
+                    state.activation = Some(registry.bind(name, version, qh, ()));
                 }
 
                 let global = Global {
@@ -808,7 +839,12 @@ impl Dispatch<WlKeyboard, WlSeat> for State {
 
         match event {
             wl_keyboard::Event::Keymap { .. } => (),
-            wl_keyboard::Event::Enter { surface, keys, .. } => {
+            wl_keyboard::Event::Enter {
+                serial,
+                surface,
+                keys,
+            } => {
+                state.last_serial = serial; // ashd
                 keyboard.surface = Some(surface.clone());
 
                 // The order is arbitrary, but we need a fixed order for our tests.
@@ -827,10 +863,12 @@ impl Dispatch<WlKeyboard, WlSeat> for State {
                 surface.keyboard_events_received.push(event);
             }
             wl_keyboard::Event::Key {
+                serial,
                 key,
                 state: key_state,
                 ..
             } => {
+                state.last_serial = serial; // ashd
                 let key_state = key_state.into_result().unwrap();
                 let surface = keyboard.surface.clone().unwrap();
 
@@ -879,11 +917,12 @@ impl Dispatch<WlPointer, WlSeat> for State {
 
         let (surface, event) = match event {
             wl_pointer::Event::Enter {
+                serial,
                 surface,
                 surface_x,
                 surface_y,
-                ..
             } => {
+                state.last_serial = serial; // ashd
                 pointer.surface = Some(surface.clone());
                 let event = PointerEvent::Enter {
                     x: surface_x,
@@ -904,10 +943,12 @@ impl Dispatch<WlPointer, WlSeat> for State {
                 (pointer.surface.clone(), event)
             }
             wl_pointer::Event::Button {
+                serial,
                 button,
                 state: button_state,
                 ..
             } => {
+                state.last_serial = serial; // ashd
                 let pressed =
                     button_state.into_result().unwrap() == wl_pointer::ButtonState::Pressed;
                 (
@@ -1173,6 +1214,36 @@ impl Dispatch<ZwpKeyboardShortcutsInhibitorV1, ()> for State {
         match event {
             zwp_keyboard_shortcuts_inhibitor_v1::Event::Active => (),
             zwp_keyboard_shortcuts_inhibitor_v1::Event::Inactive => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+// ashd: xdg-activation.
+impl Dispatch<XdgActivationV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &XdgActivationV1,
+        _event: <XdgActivationV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<XdgActivationTokenV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &XdgActivationTokenV1,
+        event: <XdgActivationTokenV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            xdg_activation_token_v1::Event::Done { token } => state.activation_tokens.push(token),
             _ => unreachable!(),
         }
     }
