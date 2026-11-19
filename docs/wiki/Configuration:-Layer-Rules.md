@@ -265,7 +265,8 @@ layer-rule {
 A window released over this layer surface at the end of an interactive move (Mod+drag, a
 title-bar drag, a client-initiated move) is hidden: it goes to the hidden scratchpad workspace,
 exactly like the `hide-window` action. The test is the surface's drawn geometry, not its input
-region. Nothing happens when the config has no hidden workspace.
+region. While a window is moved over the surface, the surface is tinted with the `insert-hint`
+colour instead of the usual insert hint. Nothing happens when the config has no hidden workspace.
 
 ```kdl
 // Drop windows on the ashd scratchpad panel to hide them.

@@ -462,6 +462,8 @@ pub struct Niri {
     pub window_mru_ui: WindowMruUi,
     /// ashd: edge panels revealed over fullscreen windows.
     pub edge_reveal: crate::edge_reveal::EdgeRevealState,
+    /// ashd: the tint over the scratchpad panel while a window is moved over it.
+    pub drop_hint: Option<crate::input::scratch_actions::DropHint>,
     /// ashd: wake-up for client scales that settle (`crate::layout::client_scale`).
     pub client_scale_timer: Option<(RegistrationToken, Duration)>,
     pub pending_mru_commit: Option<PendingMruCommit>,
@@ -3114,6 +3116,7 @@ impl Niri {
 
             window_mru_ui,
             edge_reveal: Default::default(), // ashd
+            drop_hint: None,                 // ashd
             client_scale_timer: None,        // ashd
             pending_mru_commit: None,
 
@@ -4775,8 +4778,15 @@ impl Niri {
 
     pub fn update_render_elements(&mut self, output: Option<&Output>) {
         self.update_edge_reveal_placements(output); // ashd
+        self.update_drop_hint(output); // ashd
         self.update_xray_render_elements(output);
         self.layout.update_render_elements(output);
+        // ashd: over the scratchpad panel the drop hint replaces the insert hint.
+        if let Some(hint_output) = self.drop_hint.as_ref().map(|h| h.output.clone()) {
+            if let Some(mon) = self.layout.monitor_for_output_mut(&hint_output) {
+                mon.hide_insert_hint_render();
+            }
+        }
 
         for (out, state) in self.output_state.iter_mut() {
             if output.is_none_or(|output| out == output) {
@@ -5057,6 +5067,14 @@ impl Niri {
                     push(elem.into())
                 });
             }};
+        }
+
+        // ashd: the scratchpad panel tinted while a window is moved over it (dropping hides it).
+        if let Some(hint) = self.drop_hint.as_ref().filter(|h| h.output == *output) {
+            push(
+                SolidColorRenderElement::from_buffer(&hint.buffer, hint.loc, 1., Kind::Unspecified)
+                    .into(),
+            );
         }
 
         // The overlay layer elements go next.

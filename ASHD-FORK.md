@@ -402,7 +402,10 @@ Dropping a window on the shell's scratchpad panel hides it too: a window release
 an interactive move (Mod+drag, title-bar drag, client move) over a top/overlay layer surface whose
 layer rules say `hide-dropped-windows true` is hidden like `hide-window` (the test is the surface's
 drawn geometry, so a sliding edge panel counts where it is drawn). ashd's NixOS module adds the
-rule for `^ashd-scratchpad$`.
+rule for `^ashd-scratchpad$`. While the moved window is over such a surface, the surface is tinted
+with the `insert-hint` colour (drawn above the overlay layer: the moved window itself is drawn
+under the top and overlay layers there) and the strip's own insert hint is not drawn; `insert-hint
+{ off; }` turns the tint off too.
 
 The generic actions work too and remember the origin the same way, e.g.
 `niri msg action move-window-to-workspace --window-id 7 --focus false scratch` to hide and

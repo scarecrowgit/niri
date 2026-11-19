@@ -1170,6 +1170,12 @@ impl<W: LayoutElement> Monitor<W> {
                 .any(|ws| ws.are_transitions_ongoing())
     }
 
+    /// ashd: don't draw the insert hint this frame (the moved window is over the scratchpad
+    /// panel, which shows its own drop hint).
+    pub fn hide_insert_hint_render(&mut self) {
+        self.insert_hint_render_loc = None;
+    }
+
     pub fn update_render_elements(&mut self, is_active: bool) {
         let mut insert_hint_ws_geo = None;
         let insert_hint_ws_id = self
