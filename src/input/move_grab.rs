@@ -80,6 +80,9 @@ impl MoveGrab {
     }
 
     fn on_ungrab(&mut self, data: &mut State) {
+        // ashd: released over the scratchpad panel (a `hide-dropped-windows` layer surface).
+        let hide = self.gesture == GestureState::Move
+            && data.niri.hides_dropped_windows_at(self.new_location);
         let layout = &mut data.niri.layout;
         match self.gesture {
             GestureState::Recognizing => {
@@ -100,7 +103,12 @@ impl MoveGrab {
 
                 layout.activate_window(&self.window);
             }
-            GestureState::Move => layout.interactive_move_end(&self.window),
+            GestureState::Move => {
+                layout.interactive_move_end(&self.window);
+                if hide {
+                    layout.hide_window(Some(&self.window));
+                }
+            }
             GestureState::ViewOffset => {
                 layout.view_offset_gesture_end(Some(false));
             }

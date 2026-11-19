@@ -23,6 +23,10 @@ pub struct LayerRule {
     pub focus_on_type_in_overview: Option<bool>,
     #[knuffel(child, unwrap(argument))]
     pub baba_is_float: Option<bool>,
+    /// ashd: a window released over this surface at the end of an interactive move is
+    /// hidden (moved to the hidden scratchpad workspace).
+    #[knuffel(child, unwrap(argument))]
+    pub hide_dropped_windows: Option<bool>,
     #[knuffel(child, default)]
     pub background_effect: BackgroundEffectRule,
     #[knuffel(child, default)]

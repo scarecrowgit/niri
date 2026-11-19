@@ -2624,6 +2624,7 @@ mod tests {
                     place_within_backdrop: None,
                     focus_on_type_in_overview: None,
                     baba_is_float: None,
+                    hide_dropped_windows: None,
                     background_effect: BackgroundEffectRule {
                         xray: None,
                         blur: None,

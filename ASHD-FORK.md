@@ -173,7 +173,7 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `niri-ipc/src/canvas.rs` | `WorkspaceMode`, `CanvasViewState`, `StripViewState` |
 | `src/layout/scratch.rs` | hidden (scratchpad) workspaces: `ScratchOrigin`, Layout-level `hide_window`/`unhide_window`/`hidden_windows` |
 | `src/layout/workspace/scratch_ext.rs` | child module of `workspace`: `is_hidden`/`set_hidden`, origin hooks for tiles entering/leaving a workspace |
-| `src/input/scratch_actions.rs` | `State::do_scratch_action` (`hide-window`, `unhide-window`) |
+| `src/input/scratch_actions.rs` | `State::do_scratch_action` (`hide-window`, `unhide-window`), `Niri::hides_dropped_windows_at` (drop on the scratchpad panel) |
 | `src/layout/tests/scratch.rs` | hidden workspace tests |
 | `src/layout/ws_by_index.rs` | `create-workspaces-by-index`: creating workspaces by index, trailing-only clean-up (see "Workspaces by index") |
 | `src/layout/tests/ws_by_index.rs`, `src/tests/ashd_mru.rs` | by-index layout tests; recent-windows quick-tap tests |
@@ -201,6 +201,8 @@ maximized windows (all with `restore_to_floating`, so they return to the plane).
 | `src/ipc/{server,client}.rs`, `src/cli.rs` | canvas/strip view diffing, `CanvasViews` request, `WorkspaceModeChanged`, new fields; `niri msg canvas-views` | IPC |
 | `src/ui/mru.rs` | skip hidden workspaces | scratchpad |
 | `src/input/mod.rs` (scratchpad) | `mod scratch_actions`; one match arm | actions |
+| `src/input/move_grab.rs` (scratchpad) | `on_ungrab`: hide a window released over a `hide-dropped-windows` layer surface | drop to hide |
+| `src/layer/mod.rs`, `niri-config/src/{layer_rule,lib}.rs` (scratchpad) | `hide-dropped-windows` layer rule property (+ the `parse` snapshot field) | drop to hide |
 | `niri-config/src/workspace.rs` | `hidden` flag + parse tests | config |
 | `src/layout/{monitor,mod}.rs`, `niri-config/src/{layout,workspace,lib}.rs` (by index) | see "Workspaces by index" | `create-workspaces-by-index` |
 | `niri-config/src/{lib,layout,animations,binds}.rs` | `mod canvas`, layout/animation fields, `Animation::decode_node` made `pub(crate)`, new bind actions; the big `parse` snapshot gained the new default fields | config |
@@ -395,6 +397,12 @@ Hiding and showing:
 | --- | --- | --- |
 | `hide-window` | `HideWindow { id }` (`--id` optional, default focused) | to the first hidden workspace of the window's monitor (else of any monitor), without following it |
 | `unhide-window` | `UnhideWindow { id }` (`--id` optional, default *most recently hidden*) | back to the workspace it was hidden from if that still exists (else the focused workspace), then focused like `focus-window --id` |
+
+Dropping a window on the shell's scratchpad panel hides it too: a window released at the end of
+an interactive move (Mod+drag, title-bar drag, client move) over a top/overlay layer surface whose
+layer rules say `hide-dropped-windows true` is hidden like `hide-window` (the test is the surface's
+drawn geometry, so a sliding edge panel counts where it is drawn). ashd's NixOS module adds the
+rule for `^ashd-scratchpad$`.
 
 The generic actions work too and remember the origin the same way, e.g.
 `niri msg action move-window-to-workspace --window-id 7 --focus false scratch` to hide and

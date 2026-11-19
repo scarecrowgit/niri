@@ -36,6 +36,7 @@ layer-rule {
     place-within-backdrop true
     focus-on-type-in-overview true
     baba-is-float true
+    hide-dropped-windows true
 
     background-effect {
         xray true
@@ -254,6 +255,24 @@ layer-rule {
     match namespace="^launcher$"
 
     baba-is-float true
+}
+```
+
+#### `hide-dropped-windows`
+
+<sup>ashd fork</sup>
+
+A window released over this layer surface at the end of an interactive move (Mod+drag, a
+title-bar drag, a client-initiated move) is hidden: it goes to the hidden scratchpad workspace,
+exactly like the `hide-window` action. The test is the surface's drawn geometry, not its input
+region. Nothing happens when the config has no hidden workspace.
+
+```kdl
+// Drop windows on the ashd scratchpad panel to hide them.
+layer-rule {
+    match namespace="^ashd-scratchpad$"
+
+    hide-dropped-windows true
 }
 ```
 
